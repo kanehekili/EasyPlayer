@@ -1,2 +1,2 @@
 # EasyPlayer
-A simple Video and audio player based on mpv
+A simple video and audio player based on mpv
