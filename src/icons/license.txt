@@ -1,0 +1,6 @@
+Icons a taken from the icon archive (https://iconarchive.com/)
+Some icons are linkware:
+ http://iconleak.com
+ https://openclipart.org/
+ 
+ flaticons are courtesy of https://github.com/RedFraction
