@@ -58,7 +58,7 @@ class Player(QOpenGLWidget):
     syncPlayStatus = pyqtSignal(int)
     onError = pyqtSignal(str)
     
-    def __init__(self, parent, path=None):
+    def __init__(self, parent, path=None, isVirtual=False):
         super().__init__(parent)
         self.closePending = False
         self.seekLock = Condition()
@@ -66,7 +66,7 @@ class Player(QOpenGLWidget):
         self._timePos = 0;
         self.streamData = None
         self._demuxOffset = 0.1
-        self.mpv = MPV(**self._getMPVArgs())
+        self.mpv = MPV(**self._getMPVArgs(isVirtual))
         self.filePath = path
         self._hookEvents()
         self._proc_addr_wrapper = MpvGlGetProcAddressFn(get_process_address)
@@ -77,6 +77,7 @@ class Player(QOpenGLWidget):
         self.lastError = None
         self.isAudioOnly = False
         self.durString = "00:00:00"
+        self._opengl_fbo=None
         
     def initializeGL(self) -> None:
         self.ctx = MpvRenderContext(
@@ -101,7 +102,7 @@ class Player(QOpenGLWidget):
                 self.lastError = None
                 self.isAudioOnly = self.streamData.getVideoStream() is None
                 self._tweak(self.streamData)
-                tx = FFMPEGTools.OSTools().getFileNameOnly(fn)
+                #tx = FFMPEGTools.OSTools().getFileNameOnly(fn)
                 return True
             except IOError:
                 Log.exception("Setting Stream Data")
@@ -114,6 +115,14 @@ class Player(QOpenGLWidget):
             Log.info("Optimized for VC1")  
         else:
             self.mpv.hwdec_codecs = "all"
+        interlaced = streamData.interlaced
+        if streamData.isTransportStream() or interlaced:
+            Log.info("Transport stream. Setting seek offset to high and interlacing: %d"%(interlaced))
+            self._demuxOffset=1.5#Solution for mpegts seek
+            if interlaced:
+                self.mpv.deinterlace="yes"            
+           
+            
 
     def asyncSeek(self, seconds):
         self._muteWhileSeeking(True)
@@ -145,11 +154,17 @@ class Player(QOpenGLWidget):
         self.mpv.observe_property("eof-reached", self._onPlayEnd)
         self.mpv.observe_property("time-pos", self._onTimePos)  # messes up timing!
 
-    def paintGL(self) -> None:
-        rect = self.rect()
-        if self.ctx:
-            fbo = self.defaultFramebufferObject()
-            self.ctx.render(flip_y=True, opengl_fbo={'w': rect.width(), 'h': rect.height(), 'fbo': fbo})
+    def resizeGL(self, w, h):
+        # Cache it here - resizeGL is called after the widget is properly initialized
+        sc = self.devicePixelRatio()
+        pw = int(w * sc)
+        ph = int(h * sc)
+        self._opengl_fbo = {'w': pw, 'h': ph, 'fbo': self.defaultFramebufferObject()}        
+        
+
+    def paintGL(self):
+        if self.ctx and self._opengl_fbo:
+            self.ctx.render(flip_y=True, opengl_fbo=self._opengl_fbo)
                   
     def do_update(self):
         self.update()
@@ -170,7 +185,7 @@ class Player(QOpenGLWidget):
                 self._on_update()
             
     def startPlaying(self):
-        if self.filePath is  not None:
+        if self.filePath is not None:
             self.mpv.loadfile(self.filePath)
             self._getReady()
             if not self.lastError:
@@ -184,7 +199,7 @@ class Player(QOpenGLWidget):
         self.seekLock = Condition()
         self.mpv.observe_property("duration", self._onReadyWait)
         with self.seekLock:
-            res = self.seekLock.wait(timeout=15.0)  # networking=15
+            res = self.seekLock.wait(timeout=5.0)  # networking=15
             # broken = len(self.lastError)>0
             # print("ready: %d, broken:%s"%(res,self.lastError))
             # self.isReadable=res and not broken
@@ -259,14 +274,40 @@ class Player(QOpenGLWidget):
         self.mpv = None
         event.accept()
 
-    def _getMPVArgs(self):
+    def _getMPVArgsEasy(self,isVirtual):
         kwArgs = {"hwdec":"auto-safe", "log_handler":self._passLog, "loglevel": 'error', "pause":False, "audio": "1", "keep_open": "always", "vo":"libmpv",
                 "input_vo_keyboard": False, "video-latency-hacks": "yes", "hr_seek": 'yes', "hr_seek_demuxer_offset": self._demuxOffset,  # below is test
                 "demuxer_max_back_bytes":'150M', "demuxer_max_bytes":'150M', "demuxer_cache_wait":'no', "stream_buffer_size":'255MiB',
                 "audio-display":"embedded-first"
                 }
+        if isVirtual:
+            kwArgs['gpu-dumb-mode'] = 'yes'
+            kwArgs['vd-lavc-dr'] = 'no'
         return kwArgs
-
+    
+    def _getMPVArgs(self,isVirtual):
+        kwArgs= {"hwdec":"auto-safe",
+            "vo":"libmpv", #depends on backend - see below                
+            "log_handler":self._passLog,
+            "loglevel" : 'error',
+            "input_vo_keyboard" : False,  #We'll take the qt events
+            "video_sync" : "desync", #improves seeking instead of audio = off
+            "keep_open" : "always",
+            "demuxer_lavf_analyzeduration" : 100.0,
+            "video-latency-hacks" : "yes", #efficent for fast seek
+            "hr_seek" : 'yes',            #yes for slider search
+            "hr_seek_demuxer_offset" : self._demuxOffset, #offset too large (2.1) will slow everything down, only if hr_seek is true
+            "cache" : 'yes',
+            "demuxer_seekable_cache" : 'yes',
+            "volume" : 100,
+            "audio-display":"embedded-first",
+            "opengl_early_flush":'yes'
+            }
+        if isVirtual:
+            kwArgs['gpu-dumb-mode'] = 'yes'
+            kwArgs['vd-lavc-dr'] = 'no'
+        return kwArgs
+        
     def _passLog(self, loglevel, component, message):
         msg = '{}: {}'.format(component, message)
         with self.seekLock:
@@ -280,11 +321,11 @@ class Player(QOpenGLWidget):
 class MainFrame(QtWidgets.QMainWindow):
     SLIDER_RESOLUTION = 1000 * 1000
     
-    def __init__(self, qapp, aPath=None):
+    def __init__(self, qapp, aPath=None, isVirtual=False):
         self._isStarted = False
         self.__qapp = qapp
         super(MainFrame, self).__init__()
-        self.player = Player(self, aPath)
+        self.player = Player(self, aPath, isVirtual)
         self.settings = SettingsModel(self)
         self.audioMapping = None
         self.setWindowIcon(getAppIcon())
@@ -481,17 +522,8 @@ class MainFrame(QtWidgets.QMainWindow):
         self.shortcutPageDown = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_PageDown), self)
         self.shortcutPageDown.activated.connect(lambda: self.player.seekRelative(-60))        
 
-
-    #unused- themeing recognition
-    def is_theme_dark(self):
-        """Returns True if the widget's background is dark, False if light."""
-        color = self.palette().color(QtGui.QPalette.ColorRole.Window)
-        luminance = (0.299 * color.red() + 0.587 * color.green() + 0.114 * color.blue()) / 255
-        return luminance < 0.5  
-
     def _initIcon(self):
         self.player.mpv.loadfile("icons/easyPlay.png")
-
 
     def _makeLayout(self):
         mainBox = QtWidgets.QVBoxLayout()  # for all
@@ -653,6 +685,10 @@ class MainFrame(QtWidgets.QMainWindow):
                 <td style="border: 1px solid darkgray; padding: 8px 15px;">%s</td>
             </tr>
             <tr>
+                <td style="border: 1px solid darkgray; padding: 8px 15px;"><b>Interlaced:</b></td>
+                <td style="border: 1px solid darkgray; padding: 8px 15px;">%s</td>
+            </tr>            
+            <tr>
                 <td style="border: 1px solid darkgray; padding: 8px 15px;"><b>Video Codec:</b></td>
                 <td style="border: 1px solid darkgray; padding: 8px 15px;">%s</td>
             </tr>
@@ -676,7 +712,7 @@ class MainFrame(QtWidgets.QMainWindow):
                 <td style="border: 1px solid darkgray; padding: 8px 15px;"><b>Audio codec:</b></td>
                 <td style="border: 1px solid darkgray; padding: 8px 15px;">%s</td>
             </tr>
-            </table>""" % (container.formatNames()[0], container.getBitRate(), container.getSizeKB() / 1024, streamData.isTransportStream(), codec, w, h, ar, fr, ts, acodec)
+            </table>""" % (container.formatNames()[0], container.getBitRate(), container.getSizeKB() / 1024, streamData.isTransportStream(),videoData.isInterlaced(), codec, w, h, ar, fr, ts, acodec)
 
             '''
             entries.append("""<br><\br><table border=0 cellspacing="3",cellpadding="2">""")
@@ -695,7 +731,6 @@ class MainFrame(QtWidgets.QMainWindow):
                                         
         except:
             Log.exception("Invalid codec format")
-            text = "<br><b>No Information</b><br>"  
             text2 = "<br> Please select a file first"
         self.__getInfoDialog(textDS + text2).show()
 
@@ -922,8 +957,9 @@ def parseOptions(args):
     res = {}
     res["logConsole"] = False
     res["file"] = None
+    res["virtual"]=False
     try:
-        opts, args = getopt.getopt(args[1:], "cdp:", ["console", "debug"])
+        opts, args = getopt.getopt(args[1:], "cdv", ["console", "debug", "virtual"])
         if len(args) == 1:
             res["file"] = args[0]
         else:
@@ -932,11 +968,13 @@ def parseOptions(args):
         print(err)
         sys.exit(2)
     
-    for o, a in opts:
+    for o, __ in opts:
         if o in ("-d", "--debug"):
             FFMPEGTools.setLogLevel("Debug")
         elif o in ("-c", "--console"):
             res["logConsole"] = True
+        elif o in ("-v","--virtual"):
+            res["virtual"]=True            
         else:
             print("Undef:", o) 
     return res
@@ -1043,7 +1081,7 @@ def main():
         else:
             if not OSTools().isAbsolute(fn):
                 fn = OSTools().joinPathes(localPath, fn)
-            WIN = MainFrame(app, fn) 
+            WIN = MainFrame(app, fn, res['virtual']) 
         app.exec()
     except:
         Log.exception("Error in main:")

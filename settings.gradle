@@ -1,0 +1,32 @@
+rootProject.name = "videocut"
+
+gradle.ext.version = "1.0.0"
+gradle.ext.pkgrelease = "1"
+
+gradle.ext.distros = [
+    arch: [
+        type       : "arch",
+        qtplatform : "gtk3",
+    ],
+
+    ubu0: [
+        type       : "ubuntu",
+        codename   : "noble",
+        qtplatform : "qt6ct",
+        libs       : "python3, ffmpeg, python3-pyqt6, python3-pil, libmpv2"
+    ],
+
+    ubu1: [
+        type       : "ubuntu",
+        codename   : "questing",
+        qtplatform : "gtk3",
+        libs       : "python3, ffmpeg, python3-pyqt6, python3-pil, libmpv2"
+    ],
+
+    ubu2: [
+        type       : "ubuntu",
+        codename   : "resolute",
+        qtplatform : "gtk3",
+        libs       : "python3, ffmpeg, python3-pyqt6, python3-pil, libmpv2"
+    ]
+]

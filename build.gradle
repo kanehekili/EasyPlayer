@@ -1,0 +1,34 @@
+def distros = gradle.ext.distros
+
+distros.each { name, cfg ->
+    tasks.register("build_${name}") {
+
+        doLast {
+            println "Building ${name}"
+            println "  type       = ${cfg.type}"
+            println "  qtplatform = ${cfg.qtplatform}"
+
+            if (cfg.type == "arch") {
+                copy {
+                    from(".")
+                    include("*.desktop", "*install*.sh")
+                    into("$buildDir/stage/videocut")
+                }
+            }
+
+            if (cfg.type == "ubuntu") {
+                copy {
+                    from("DEB-template")
+                    into("$buildDir/stage/videocut-${cfg.codename}")
+                    expand(
+                        ubu        : cfg.codename,
+                        xxx        : gradle.ext.version,
+                        xpkgrelx   : gradle.ext.pkgrelease,
+                        xlibsx     : cfg.libs,
+                        qtplatform : cfg.qtplatform
+                    )
+                }
+            }
+        }
+    }
+}

@@ -158,7 +158,7 @@ class OSTools():
 
     def joinPathes(self,*pathes):
         res=pathes[0]
-        for head,tail in self.__pairwise(pathes):
+        for __,tail in self.__pairwise(pathes):
         #for a, b in tee(pathes):
             res = os.path.join(res, tail)
         return res
@@ -210,7 +210,8 @@ class OSTools():
         return os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
     def setGTKEnvironment(self):
-        os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3"
+        #won't work on cinn 22.2 / numbat: needs qt6ct
+        #os.environ["QT_QPA_PLATFORMTHEME"] = "@qtplatform@"
         os.environ['QT_QPA_PLATFORM'] = 'xcb'
 
 class ConfigAccessor():
@@ -580,9 +581,7 @@ class FormatMapGenerator():
     
     #This is target map only!  
     def _findFmtTargetMap(self,vCodec, aCodec):
-        for fi, fmtMap in self.table.items():
-            #if fi=="mpegts":
-            #    continue
+        for __, fmtMap in self.table.items():
             if fmtMap.containsCodecs(vCodec, aCodec):
                 return fmtMap
         return None
@@ -605,7 +604,7 @@ class FormatMapGenerator():
     #takes the extension and get the most likely format.
     def fromFilename(self,path):
         ext = OSTools().getExtension(path,withDot=False)
-        for fi, fmtMap in self.table.items():
+        for __, fmtMap in self.table.items():
             if ext in fmtMap.extensions:
                 return fmtMap
         
@@ -616,6 +615,7 @@ class FormatMapGenerator():
 
 FORMATS = FormatMapGenerator()
 
+#ffprobe -read_intervals "%+#3" -select_streams v -i self.path -show_entries "frame=interlaced_frame"
         
 class FFStreamProbe():
 
@@ -623,9 +623,35 @@ class FFStreamProbe():
         # self._setupConversionTable()
         self.path = video_file
         self._readData()
+        self.interlaced = self._probeInterlacedData()
+        self.sanityCheck()
+     
+    def _probeInterlacedData(self):
+        vs = self.getVideoStream()
+        if vs is None:
+            return False
+        res = vs.isInterlaced()
+        if res is not None:
+            return res
+        
+        cmd = ["ffprobe", "-read_intervals","5%+#10", "-select_streams","v","-i", self.path, '-show_entries',"frame=interlaced_frame","-v", "quiet"]
+        #cmd = ["ffprobe", "-select_streams","v", self.path, '-show_entries','"frame=interlaced_frame"',"-v", "quiet"]
+
+        Log.info("ffprobe:%s",cmd) 
+        result = Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+        if len(result[0]) == 0:
+            return False
+        lines = result[0].decode("utf-8").split('\n')
+        for a in lines: 
+            if re.match(r'interlaced_frame',a):
+                return  "1" in a
+        return False        
+         
          
     def _readData(self):
-        result = Popen(["ffprobe", "-show_format", "-show_streams", self.path, "-v", "quiet"], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
+        cmd = ["ffprobe", "-show_format", "-show_streams", self.path, "-v", "quiet"]
+        Log.info("ffprobe:%s",cmd)
+        result = Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
         if len(result[0]) == 0:
             raise IOError('Not a media file ' + self.path)
         self.streams = []
@@ -652,7 +678,7 @@ class FFStreamProbe():
                 datalines.append(a)
         for a in self.streams:
             if a.isAudio():
-                self.audio.append(a)
+                self.audio.append(a) #save invalid audios for sake of the slot
                 a.slot=len(self.audio)
             elif a.isVideo():
                 self.video.append(a)
@@ -660,7 +686,6 @@ class FFStreamProbe():
             elif a.isSubTitle():
                 self.subtitle.append(a)
                 a.slot=len(self.subtitle)
-        self.sanityCheck()
 
     def sanityCheck(self):
         if logging.root.level!=logging.DEBUG:
@@ -682,6 +707,7 @@ class FFStreamProbe():
             Log.debug("getHeight: %s", s.getHeight())
             Log.debug("isAudio: %r", s.isAudio())
             Log.debug("isVideo: %r", s.isVideo())
+            Log.debug("interlaced: %r",self.interlaced)
         
         Log.debug("-------- Audio -------------")
         s = self.getAudioStream()
@@ -796,19 +822,18 @@ class FFStreamProbe():
         for stream in self.streams:
             if stream.isVideo():
                 continue
-            res = stream.getLanguage()
-            if res == VideoFormatInfo.NA:
+            key = stream.getLanguage()
+            if key == VideoFormatInfo.NA:
                 continue
+            if key not in lang:
+                lang[key]=[-1,-1]
             
-            if res not in lang:
-                lang[res]=[-1,-1]
-            
-            if stream.isAudio():
-                if lang[res][0]==-1:
-                    lang[res][0]=stream.slot #MPV specific, might not be the stream number.. 
+            if stream.isValidAudio():
+                if lang[key][0]==-1:
+                    lang[key][0]=stream.slot #MPV specific, might not be the stream number.. 
                     
-            elif lang[res][1]==-1:
-                lang[res][1]=stream.slot
+            elif lang[key][1]==-1:
+                lang[key][1]=stream.slot
         return lang 
    
     def hasFormat(self, formatName):
@@ -995,6 +1020,7 @@ class VideoStreamInfo():
         self.tagDict = {}
         self._parse(dataArray)
         self.slot=1 #thats the index in its list (mpv uses this) starting with 1
+        
     
     def _parse(self, dataArray):
         for entry in dataArray:
@@ -1075,11 +1101,14 @@ class VideoStreamInfo():
     '''
     def isInterlaced(self):
         interlacedID=["tb","tt","bt","bb"]
+        nonInterlaced = "progressive"
         if "field_order" in self.dataDict:
             fo=self.dataDict["field_order"]
             if fo in interlacedID:
                 return True
-        return False
+            if fo == nonInterlaced:
+                return False
+        return None
 
     def getCodec(self):
         return self.dataDict.get('codec_name',self.NA)
