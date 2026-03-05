@@ -5,7 +5,7 @@ Version 1.0.0
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
-![Screenshot](https://github.com/kanehekili/EasyPlayer/blob/master/easyplayer.png)
+![Screenshot](https://github.com/kanehekili/EasyPlayer/blob/main/easyplayer.png)
 
 ### Prerequisites
 * Arch: python3, python-pillow and mpv
