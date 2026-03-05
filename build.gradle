@@ -1,34 +1,196 @@
-def distros = gradle.ext.distros
+import org.apache.tools.ant.filters.ReplaceTokens
+import java.security.MessageDigest
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 
-distros.each { name, cfg ->
-    tasks.register("build_${name}") {
+def version    = gradle.ext.version
+def pkgrelease = gradle.ext.pkgrelease
+def distros    = gradle.ext.distros
+
+// All output goes to dist/ — templates in build/ are never touched by "clean"
+def outDir = file("dist")
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+def computeMD5(File f) {
+    def md = MessageDigest.getInstance("MD5")
+    f.eachByte(65536) { bytes, len -> md.update(bytes, 0, len) }
+    md.digest().encodeHex().toString()
+}
+
+// ReplaceTokens expects a plain Map<String,String>; coerce GStrings to String
+def tok(Map m) { m.collectEntries { k, v -> [k.toString(), v.toString()] } }
+
+def stageDir = { String sub -> file("${outDir}/stage/${sub}") }
+
+// Copy *.py sources + icons + lib/mpv.py into a staging directory
+def stageSources = { File dst ->
+    copy {
+        from("src") { include "*.py" }
+        into(dst)
+        filter(ReplaceTokens, tokens: tok([xxx: version]))
+    }
+    file("${dst}/EasyPlayer.py").setExecutable(true)
+    copy { from "src/icons"      into "${dst}/icons" }
+    copy { from "src/lib/mpv.py" into "${dst}/lib"   }
+}
+
+// Create an uncompressed tar; arcName becomes the single root directory inside
+def makeTar = { File tarFile, String arcName, File sourceDir ->
+    ant.tar(destfile: tarFile, basedir: sourceDir.parent, includes: "${arcName}/**")
+}
+
+// Generate .SRCINFO content from PKGBUILD data (no makepkg required)
+def makeSrcInfo = { String pkgver, String pkgrel, String md5 ->
+    def depends = ["python-pyqt6", "mpv", "ffmpeg"]
+    def depLines = depends.collect { "\tdepends = ${it}" }.join("\n")
+"""\
+pkgbase = easyplayer
+\tpkgdesc = Simple video and audio player based on mpv
+\tpkgver = ${pkgver}
+\tpkgrel = ${pkgrel}
+\turl = https://github.com/kanehekili/EasyPlayer
+\tarch = x86_64
+\tarch = aarch64
+\tlicense = GPL-2.0-or-later
+${depLines}
+\tsource = https://github.com/kanehekili/EasyPlayer/releases/download/${pkgver}/easyplayer${pkgver}.tar
+\tmd5sums = ${md5}
+
+pkgname = easyplayer
+"""
+}
+
+// ── AUR ───────────────────────────────────────────────────────────────────────
+
+tasks.register("build_aur") {
+    description = "Generate dist/AUR/PKGBUILD and .SRCINFO"
+    group       = "packaging"
+
+    doLast {
+        def stage  = stageDir("easyplayer")
+        def aurOut = file("${outDir}/AUR")
+        stage.mkdirs()
+        aurOut.mkdirs()
+
+        stageSources(stage)
+        copy { from "build/EasyPlayer.desktop" into stage }
+
+        // Source tarball (uploaded to GitHub Releases alongside the PKGBUILD)
+        def tarFile = file("${outDir}/easyplayer${version}.tar")
+        makeTar(tarFile, "easyplayer", stage)
+
+        def md5 = computeMD5(tarFile)
+        println "  AUR source tarball : ${tarFile.name}  md5=${md5}"
+
+        copy {
+            from "build/AUR-template/PKGBUILD"
+            into aurOut
+            filter(ReplaceTokens, tokens: tok([xxx: version, xpkgrelx: pkgrelease, md5sum: md5]))
+        }
+
+        file("${aurOut}/.SRCINFO").text = makeSrcInfo(version, pkgrelease, md5)
+        println "  .SRCINFO generated"
+
+        delete stage
+    }
+}
+
+// ── DEB (one task per ubuntu distro) ─────────────────────────────────────────
+
+distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
+
+    tasks.register("build_${_name}") {
+        description = "Generate dist/DEB tarball for Ubuntu ${cfg.codename}"
+        group       = "packaging"
 
         doLast {
-            println "Building ${name}"
-            println "  type       = ${cfg.type}"
-            println "  qtplatform = ${cfg.qtplatform}"
+            def buildName = "easyplayer_${version}+${pkgrelease}~${cfg.codename}"
+            def ubuStage  = stageDir(buildName)
+            def debOut    = file("${outDir}/DEB")
+            ubuStage.mkdirs()
+            debOut.mkdirs()
 
-            if (cfg.type == "arch") {
-                copy {
-                    from(".")
-                    include("*.desktop", "*install*.sh")
-                    into("$buildDir/stage/videocut")
-                }
+            stageSources(file("${ubuStage}/src"))
+            copy { from "build/EasyPlayer.desktop" into "${ubuStage}/addons" }
+
+            def timestamp = ZonedDateTime.now(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ofPattern("EEE, d MMM yyyy HH:mm:ss", Locale.ENGLISH))
+
+            // copyright is copied unfiltered — @ in email addresses would be
+            // misinterpreted as ReplaceTokens delimiters
+            copy {
+                from "build/DEB-template/debian"
+                into "${ubuStage}/debian"
+                exclude "copyright"
+                filter(ReplaceTokens, tokens: tok([
+                    ubu      : cfg.codename,
+                    xxx      : version,
+                    xpkgrelx : pkgrelease,
+                    xtsx     : timestamp,
+                    xlibsx   : cfg.libs,
+                ]))
+            }
+            copy {
+                from "build/DEB-template/debian/copyright"
+                into "${ubuStage}/debian"
             }
 
-            if (cfg.type == "ubuntu") {
-                copy {
-                    from("DEB-template")
-                    into("$buildDir/stage/videocut-${cfg.codename}")
-                    expand(
-                        ubu        : cfg.codename,
-                        xxx        : gradle.ext.version,
-                        xpkgrelx   : gradle.ext.pkgrelease,
-                        xlibsx     : cfg.libs,
-                        qtplatform : cfg.qtplatform
-                    )
-                }
-            }
+            def tarFile = file("${debOut}/${buildName}.tar")
+            makeTar(tarFile, buildName, ubuStage)
+            println "  → ${tarFile.name}"
+
+            delete ubuStage
         }
     }
 }
+
+// ── PyPI ──────────────────────────────────────────────────────────────────────
+
+tasks.register("build_pypi") {
+    description = "Generate dist/PYPI/ – ready for: pip install . or python -m build"
+    group       = "packaging"
+
+    doLast {
+        def pypiRoot = file("${outDir}/PYPI/easyplayer")
+        def pkgDir   = file("${pypiRoot}/easyplayer")
+        pkgDir.mkdirs()
+
+        stageSources(pkgDir)
+
+        // Package marker so Python treats the directory as a package
+        file("${pkgDir}/__init__.py").text = ""
+
+        // Expand pyproject.toml / MANIFEST.in templates
+        copy {
+            from "build/pypi-template"
+            into pypiRoot
+            filter(ReplaceTokens, tokens: tok([xxx: version]))
+        }
+
+        if (file("README.md").exists()) {
+            copy { from "README.md" into pypiRoot }
+        }
+
+        println "  → dist/PYPI/easyplayer/"
+        println "    build:   cd dist/PYPI/easyplayer && python -m build"
+        println "    upload:  twine upload dist/*"
+    }
+}
+
+// ── aggregate ─────────────────────────────────────────────────────────────────
+
+tasks.register("clean") {
+    description = "Delete the dist/ output directory"
+    group       = "build"
+    doLast { delete outDir }
+}
+
+tasks.register("build_all") {
+    description = "Build all packages: AUR, DEB x${distros.count { it.value.type == 'ubuntu' }}, PyPI"
+    group       = "packaging"
+    dependsOn tasks.matching { t -> t.name.startsWith("build_") && t.name != "build_all" }
+}
+
+defaultTasks "build_all"

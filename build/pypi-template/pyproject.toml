@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "easyplayer"
+version = "@xxx@"
+description = "Simple video and audio player based on mpv"
+readme = "README.md"
+license = {text = "GPL-2.0-or-later"}
+requires-python = ">=3.9"
+dependencies = ["PyQt6"]
+
+[project.urls]
+Homepage = "https://github.com/kanehekili/EasyPlayer"
+
+[project.scripts]
+easyplayer = "easyplayer.EasyPlayer:main"
+
+[tool.setuptools.package-data]
+easyplayer = [
+    "icons/*",
+    "icons/**/*",
+    "lib/mpv.py",
+]

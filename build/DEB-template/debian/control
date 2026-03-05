@@ -1,0 +1,13 @@
+Source: easyplayer
+Maintainer: Kanehekili <kanehekili.media@gmail.com>
+Section: video
+Priority: optional
+Build-Depends: debhelper
+Standards-Version: 3.0.0
+
+Package: easyplayer
+Architecture: amd64 arm64 armhf
+Depends: @xlibsx@, ${shlibs:Depends}, ${misc:Depends}
+Description: Simple video and audio player based on mpv
+Section: video
+Priority: optional

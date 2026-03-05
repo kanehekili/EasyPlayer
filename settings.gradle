@@ -1,32 +1,35 @@
-rootProject.name = "videocut"
+rootProject.name = "easyplayer"
 
-gradle.ext.version = "1.0.0"
+// ── Release config ────────────────────────────────────────────────────────────
+// Edit version / pkgrelease here, then run:  gradle build_all
+gradle.ext.version    = "1.0.0"
 gradle.ext.pkgrelease = "1"
 
+// ── Target distros ────────────────────────────────────────────────────────────
+// Add / remove ubuN entries to change Ubuntu targets.
+// "arch" drives the direct-install tarball (install.sh + sources).
 gradle.ext.distros = [
+
     arch: [
-        type       : "arch",
-        qtplatform : "gtk3",
+        type: "arch",
     ],
 
     ubu0: [
-        type       : "ubuntu",
-        codename   : "noble",
-        qtplatform : "qt6ct",
-        libs       : "python3, ffmpeg, python3-pyqt6, python3-pil, libmpv2"
+        type:     "ubuntu",
+        codename: "noble",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2",
     ],
 
     ubu1: [
-        type       : "ubuntu",
-        codename   : "questing",
-        qtplatform : "gtk3",
-        libs       : "python3, ffmpeg, python3-pyqt6, python3-pil, libmpv2"
+        type:     "ubuntu",
+        codename: "questing",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2",
     ],
 
     ubu2: [
-        type       : "ubuntu",
-        codename   : "resolute",
-        qtplatform : "gtk3",
-        libs       : "python3, ffmpeg, python3-pyqt6, python3-pil, libmpv2"
-    ]
+        type:     "ubuntu",
+        codename: "resolute",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2",
+    ],
+
 ]
