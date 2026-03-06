@@ -62,6 +62,19 @@ pkgname = easyplayer
 """
 }
 
+// ── update mpv binding ────────────────────────────────────────────────────────
+
+tasks.register("updateMPV") {
+    description = "Download latest mpv.py from jaseg/python-mpv"
+    group       = "packaging"
+    doLast {
+        exec {
+            commandLine "wget", "-O", "src/lib/mpv.py",
+                "https://raw.githubusercontent.com/jaseg/python-mpv/main/mpv.py"
+        }
+    }
+}
+
 // ── AUR ───────────────────────────────────────────────────────────────────────
 
 tasks.register("build_aur") {
@@ -190,6 +203,7 @@ tasks.register("clean") {
 tasks.register("build_all") {
     description = "Build all packages: AUR, DEB x${distros.count { it.value.type == 'ubuntu' }}, PyPI"
     group       = "packaging"
+    dependsOn "updateMPV"
     dependsOn tasks.matching { t -> t.name.startsWith("build_") && t.name != "build_all" }
 }
 
