@@ -68,10 +68,9 @@ tasks.register("updateMPV") {
     description = "Download latest mpv.py from jaseg/python-mpv"
     group       = "packaging"
     doLast {
-        exec {
-            commandLine "wget", "-O", "src/lib/mpv.py",
-                "https://raw.githubusercontent.com/jaseg/python-mpv/main/mpv.py"
-        }
+        ["wget", "-O", "src/lib/mpv.py",
+         "https://raw.githubusercontent.com/jaseg/python-mpv/main/mpv.py"]
+            .execute().waitFor()
     }
 }
 
