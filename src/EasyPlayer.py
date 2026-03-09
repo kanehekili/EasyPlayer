@@ -29,7 +29,7 @@ from PyQt6.QtCore import QByteArray, pyqtSignal, pyqtSlot, QThread
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
-import sys, json, FFMPEGTools, getopt, traceback, locale
+import sys, json, FFMPEGTools, getopt, traceback, locale, os, re
 from threading import Condition
 from QtTools import SliderThread
 
@@ -50,6 +50,56 @@ def get_process_address(_, name):
     return address
 
 
+PLAYLIST_EXTENSIONS = {'.m3u', '.m3u8', '.pls', '.xspf'}
+
+
+def _parsePlaylist(path):
+    """Parse playlist file and return list of absolute paths/URLs."""
+    base = os.path.dirname(os.path.abspath(path))
+    _, ext = os.path.splitext(path)
+    ext = ext.lower()
+    entries = []
+
+    def resolve(p):
+        p = p.strip()
+        if not p:
+            return None
+        if '://' in p:
+            return p
+        if not os.path.isabs(p):
+            p = os.path.join(base, p)
+        return p
+
+    try:
+        if ext in ('.m3u', '.m3u8'):
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        r = resolve(line)
+                        if r:
+                            entries.append(r)
+        elif ext == '.pls':
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    m = re.match(r'File\d+=(.+)', line.strip(), re.IGNORECASE)
+                    if m:
+                        r = resolve(m.group(1))
+                        if r:
+                            entries.append(r)
+        elif ext == '.xspf':
+            import xml.etree.ElementTree as ET
+            ns = {'x': 'http://xspf.org/ns/0/'}
+            for loc in ET.parse(path).findall('.//x:location', ns):
+                if loc.text:
+                    r = resolve(loc.text)
+                    if r:
+                        entries.append(r)
+    except Exception:
+        Log.exception("Parsing playlist %s", path)
+    return entries
+
+
 class Player(QOpenGLWidget):
     ERR_IDS = ["No video or audio streams selected.", "Failed to recognize file format."]
     triggerUpdate = pyqtSignal(float)
@@ -57,6 +107,7 @@ class Player(QOpenGLWidget):
     fileLoaded = pyqtSignal()
     syncPlayStatus = pyqtSignal(int)
     onError = pyqtSignal(str)
+    playlistTrackChanged = pyqtSignal(str)
     
     def __init__(self, parent, path=None, isVirtual=False):
         super().__init__(parent)
@@ -68,6 +119,7 @@ class Player(QOpenGLWidget):
         self._demuxOffset = 0.1
         self.mpv = MPV(**self._getMPVArgs(isVirtual))
         self.filePath = path
+        self.isPlaylist = False
         self._hookEvents()
         self._proc_addr_wrapper = MpvGlGetProcAddressFn(get_process_address)
         self.triggerUpdate.connect(self.do_update)  # works only if video
@@ -95,19 +147,15 @@ class Player(QOpenGLWidget):
 
     def setStreamData(self, fn):
         self.filePath = None
+        self.isPlaylist = False
+        self.streamData = None
+        self.isAudioOnly = False
+        self.lastError = None
         if fn:
-            try:
-                self.streamData = FFStreamProbe(fn)
-                self.filePath = fn
-                self.lastError = None
-                self.isAudioOnly = self.streamData.getVideoStream() is None
-                self._tweak(self.streamData)
-                #tx = FFMPEGTools.OSTools().getFileNameOnly(fn)
-                return True
-            except IOError:
-                Log.exception("Setting Stream Data")
-                self.lastError = "Invalid media file"
-                self.onError.emit(self.lastError)
+            ext = FFMPEGTools.OSTools().getExtension(fn)
+            self.isPlaylist = ext.lower() in PLAYLIST_EXTENSIONS
+            self.filePath = fn
+            return True
 
     def _tweak(self, streamData):
         if streamData.isVC1Codec(): 
@@ -153,6 +201,7 @@ class Player(QOpenGLWidget):
     def _hookEvents(self):
         self.mpv.observe_property("eof-reached", self._onPlayEnd)
         self.mpv.observe_property("time-pos", self._onTimePos)  # messes up timing!
+        self.mpv.observe_property("media-title", self._onMediaTitle)
 
     def resizeGL(self, w, h):
         # Cache it here - resizeGL is called after the widget is properly initialized
@@ -176,7 +225,55 @@ class Player(QOpenGLWidget):
 
     def _onPlayEnd(self, _name, val):
         if val == True:
-            self.toggleVideoPlay()
+            if self.isPlaylist:
+                try:
+                    pos = self.mpv.playlist_pos
+                    count = len(self.mpv.playlist)
+                    if pos is not None and pos < count - 1:
+                        self.mpv.playlist_next('weak')
+                    else:
+                        self.mpv.pause = True
+                        self.syncPlayStatus.emit(False)
+                except Exception:
+                    self.syncPlayStatus.emit(False)
+            else:
+                self.toggleVideoPlay()
+
+    def _onMediaTitle(self, _name, val):
+        if val and self.isPlaylist:
+            self.playlistTrackChanged.emit(val)
+
+    def nextTrack(self):
+        try:
+            self.mpv.playlist_next()
+        except Exception:
+            Log.info("no nextTrack")
+
+    def prevTrack(self):
+        try:
+            self.mpv.playlist_prev()
+        except Exception:
+            Log.info("no prevTrack")
+
+    def _probeCurrentTrack(self):
+        path = self.mpv.path
+        if not path:
+            self.fileLoaded.emit()
+            return
+        if path == getattr(self, '_probedPath', None):
+            return
+        self._probedPath = path
+        self.streamData = None
+        try:
+            sd = FFStreamProbe(path)
+            self.streamData = sd
+            self.isAudioOnly = sd.getVideoStream() is None
+            self._tweak(sd)
+        except IOError:
+            Log.exception("Setting Stream Data")
+            self.lastError = "Invalid media file"
+            self.onError.emit(self.lastError)
+        self.fileLoaded.emit()
 
     def _onTimePos(self, _name, val):
         if val is not None:
@@ -186,17 +283,29 @@ class Player(QOpenGLWidget):
             
     def startPlaying(self):
         if self.filePath is not None:
-            self.mpv.loadfile(self.filePath)
+            if self.isPlaylist:
+                entries = _parsePlaylist(self.filePath)
+                if not entries:
+                    self.lastError = "Empty or unreadable playlist"
+                    self.onError.emit(self.lastError)
+                else:
+                    self.mpv.loadfile(entries[0], 'replace')
+                    for entry in entries[1:]:
+                        self.mpv.loadfile(entry, 'append')
+            else:
+                self.mpv.loadfile(self.filePath)
             self._getReady()
             if not self.lastError:
-                self.mpv.pause = False
-                self.syncPlayStatus.emit(True)
-                self.fileLoaded.emit()
-                return
+                self._probeCurrentTrack()
+                if not self.lastError:
+                    self.mpv.pause = False
+                    self.syncPlayStatus.emit(True)
+                    return
         self.syncPlayStatus.emit(False)
     
     def _getReady(self):
         self.seekLock = Condition()
+        self.lastError = None
         self.mpv.observe_property("duration", self._onReadyWait)
         with self.seekLock:
             res = self.seekLock.wait(timeout=5.0)  # networking=15
@@ -368,6 +477,19 @@ class MainFrame(QtWidgets.QMainWindow):
         self.mediaSettings.setShortcut('Ctrl+T')
         self.mediaSettings.triggered.connect(self._openMediaSettings)
 
+        style = self.style()
+        #self.prevTrackAction = QtGui.QAction(style.standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipBackward), 'Previous track', self)
+        self.prevTrackAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("prev")), 'Previous track', self)
+        self.prevTrackAction.setShortcut('Ctrl+Left')
+        self.prevTrackAction.triggered.connect(self.player.prevTrack)
+        self.prevTrackAction.setEnabled(False)
+
+        #self.nextTrackAction = QtGui.QAction(style.standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipForward), 'Next track', self)
+        self.nextTrackAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("next")), 'Next track', self)
+        self.nextTrackAction.setShortcut('Ctrl+Right')
+        self.nextTrackAction.triggered.connect(self.player.nextTrack)
+        self.nextTrackAction.setEnabled(False)
+
         self.languagebox = QtWidgets.QComboBox()
         self.languagebox.currentTextChanged.connect(self._onLanguageChanged)
         self.languagebox.setToolTip("Select audio")
@@ -378,13 +500,13 @@ class MainFrame(QtWidgets.QMainWindow):
         self.checkSubtitle.setToolTip("Subtitles")
         self.checkSubtitle.stateChanged.connect(self._onSubtitleChanged)
         '''
-        spacer = QtWidgets.QWidget()
-        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
-        
+
         self.toolbar = self.addToolBar('Main')
         self.toolbar.addAction(self.loadAction)
         self.toolbar.addSeparator()
+        self.toolbar.addAction(self.prevTrackAction)
         self.toolbar.addAction(self.playAction)
+        self.toolbar.addAction(self.nextTrackAction)
         self.toolbar.addAction(self.infoAction)
         self.toolbar.addAction(self.photoAction)
         self.toolbar.addSeparator()
@@ -394,22 +516,37 @@ class MainFrame(QtWidgets.QMainWindow):
         self.toolbar.addSeparator()
         self.toolbar.addWidget(self.checkSubtitle)
         '''
-        self.toolbar.addWidget(spacer)
         self.toolbar.addAction(self.fsAction)
-        
+
         color = self.toolbar.palette().color(QtGui.QPalette.ColorRole.Window)
         bc = color.darker(120)
         darker = color.darker(150)
         lighter = color.lighter(140)
-        self.toolbar.setStyleSheet("QToolBar { background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,stop: 0 %s, stop: 1.0 %s); border: 1px solid %s;}" % (darker.name(), lighter.name(), bc.name()))                      
+        self.toolbar.setStyleSheet("QToolBar { background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,stop: 0 %s, stop: 1.0 %s); border: 1px solid %s;}" % (darker.name(), lighter.name(), bc.name()))
+
+
+        #The info row below:
+        self.ui_InfoRow = QtWidgets.QFrame()
+        self.ui_InfoRow.setStyleSheet("QFrame { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 %s, stop:1 %s); border: 1px solid %s; }" % (darker.name(), lighter.name(), bc.name()))
+        fontM = QtGui.QFontMetrics(self.font())
+        self.ui_InfoRow.setFixedHeight(fontM.height() + round(fontM.height() * 0.5))
+
+        rowLayout = QtWidgets.QHBoxLayout(self.ui_InfoRow)
+        rowLayout.setContentsMargins(4, 0, 4, 0)
+        rowLayout.setSpacing(0)
+
+        self.ui_NowPlaying = QtWidgets.QLabel()
+        self.ui_NowPlaying.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.ui_NowPlaying.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.ui_NowPlaying.setStyleSheet("QLabel { background: transparent; border: none; }")
 
         self.ui_InfoLabel = QtWidgets.QLabel(self)
-        self.ui_InfoLabel.setStyleSheet("QLabel { background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,stop: 0 %s, stop: 1.0 %s); border: 1px solid %s;}" % (darker.name(), lighter.name(), bc.name()))
+        self.ui_InfoLabel.setStyleSheet("QLabel { background: transparent; border: none; }")
         self.ui_InfoLabel.setText("0")
-        fontM = QtGui.QFontMetrics(self.ui_InfoLabel.font())
-        self.ui_InfoLabel.setFixedHeight(fontM.height() + round(fontM.height() * 0.5))
         self.ui_InfoLabel.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignRight)
         self.ui_InfoLabel.setToolTip("Infos about the media position")
+        rowLayout.addWidget(self.ui_NowPlaying)
+        rowLayout.addWidget(self.ui_InfoLabel)
         
         self._createSlider()
        
@@ -435,7 +572,7 @@ class MainFrame(QtWidgets.QMainWindow):
         if not self._fullscreen:
             # hide all UI except player
             self.toolbar.hide()
-            self.ui_InfoLabel.hide()
+            self.ui_InfoRow.hide()
             self.ui_Slider.hide()
             self._fullscreen = True
             self.showFullScreen()
@@ -448,7 +585,7 @@ class MainFrame(QtWidgets.QMainWindow):
         if self._fullscreen:
             # restore UI
             self.toolbar.show()
-            self.ui_InfoLabel.show()
+            self.ui_InfoRow.show()
             self.ui_Slider.show()
             self._fullscreen = False
             self.showNormal()
@@ -467,10 +604,16 @@ class MainFrame(QtWidgets.QMainWindow):
         isVideo = not self.player.isAudioOnly
         self.languagebox.setEnabled(isVideo)
         self.photoAction.setEnabled(isVideo)
+        hasPlaylist = self.player.isPlaylist and len(self.player.mpv.playlist) > 1
+        self.prevTrackAction.setEnabled(hasPlaylist)
+        self.nextTrackAction.setEnabled(hasPlaylist)
+        if not hasPlaylist:
+            self.ui_NowPlaying.setText("")
         if isVideo:
             self._updateLang(streamData)
 
     def _updateLang(self, streamData):
+        self.languagebox.blockSignals(True)
         self.languagebox.clear()
         if not streamData:
             self.audioMapping = {}
@@ -484,8 +627,9 @@ class MainFrame(QtWidgets.QMainWindow):
             if len(akeys) == 1 and audioCount > 0:
                 self.audioMapping["Audio"] = (1, 0)
                 akeys = ["Audio", "Mute"]
-            
+
             self.languagebox.addItems(akeys)
+        self.languagebox.blockSignals(False)
 
     # #settings callback 1
     def _onSubtitleChanged(self, isSelected):
@@ -535,7 +679,8 @@ class MainFrame(QtWidgets.QMainWindow):
         btn1Box.addWidget(self.uiStopButton)
         '''
         mainBox.addWidget(self.player)
-        mainBox.addWidget(self.ui_InfoLabel)
+        #mainBox.addWidget(self.ui_InfoLabel)
+        mainBox.addWidget(self.ui_InfoRow)
         mainBox.addWidget(self.ui_Slider)
         return mainBox
      
@@ -547,7 +692,8 @@ class MainFrame(QtWidgets.QMainWindow):
     
     def loadFile(self):
         initalPath = self.player.getSourceDir()
-        result = QtWidgets.QFileDialog.getOpenFileName(parent=self, directory=initalPath, caption="Load Media");
+        fileFilter = "Media & Playlists (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.mp3 *.flac *.ogg *.wav *.aac *.m3u *.m3u8 *.pls *.xspf);;Playlists (*.m3u *.m3u8 *.pls *.xspf);;All files (*)"
+        result = QtWidgets.QFileDialog.getOpenFileName(parent=self, directory=initalPath, caption="Load Media", filter=fileFilter)
         if result[0]:
             fn = self.__encodeQString(result)
             QtCore.QTimer.singleShot(10, lambda: self._switchStream(fn))
@@ -556,6 +702,8 @@ class MainFrame(QtWidgets.QMainWindow):
     def _switchStream(self, fn):
         if not fn:
             return
+        self.prevTrackAction.setEnabled(False)                                                                                                    
+        self.nextTrackAction.setEnabled(False)         
         try:
             self.player.setStreamData(fn)
             self.updateWindowTitle(fn)
@@ -620,28 +768,35 @@ class MainFrame(QtWidgets.QMainWindow):
         self.loadAction.setEnabled(enable)
         
     def __queueStarted(self):  # mpv thread
-        self.player.syncPlayStatus.connect(self._onSyncPlayerControls) 
+        self.player.syncPlayStatus.connect(self._onSyncPlayerControls)
         self.player.fileLoaded.connect(lambda: self._prepareNextStream(self.player.streamData))
         self.player.triggerUpdate.connect(self._onSyncSlider)
+        self.player.playlistTrackChanged.connect(self.ui_NowPlaying.setText)
         self.settings.changeEQ.connect(self._onEQChanged)
         self.settings.changeSub.connect(self._onSubtitleChanged)
-        #self._switchStream(self.player.filePath)
         QtCore.QTimer.singleShot(10, lambda: self._switchStream(self.player.filePath))
     
     def asyncPlay(self):
         self.w = Worker(self.player.startPlaying)
         self.w.finished.connect(self.w.deleteLater)  # safer cleanup
         self.w.start()
+
     
     def showCodecInfo(self):
         na = "N.A."
         try:
-            # fn = self.player.filePath
-            # if not fn:
-            #    self.__getInfoDialog("No data").show()
-            #    return
-             
             streamData = self.player.streamData
+            if streamData is None:
+                path = self.player.mpv.path
+                if not path:
+                    self.getErrorDialog("No info", "No stream info available", "").show()
+                    return
+                try:
+                    streamData = FFStreamProbe(path)
+                    self.player.streamData = streamData
+                except IOError:
+                    self.getErrorDialog("No info", "Could not read stream info", "").show()
+                    return
             container = streamData.formatInfo;
             videoData = streamData.getVideoStream()
             audioData = streamData.getAudioStream()
