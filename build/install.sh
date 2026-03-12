@@ -17,4 +17,5 @@ cp "$DIR"/EasyPlayer.desktop /usr/share/applications/
 ln -sf /opt/easyplayer/EasyPlayer.py /usr/bin/easyplayer
 
 echo "EasyPlayer installed."
-echo "Required packages: python3-pyqt6 libmpv2 ffmpeg"
+echo "Required packages: python3-pyqt6 libmpv2 ffmpeg python3-numpy pulseaudio-utils"
+echo "Spectrum analyzer (optional): sudo pip install sounddevice --break-system-packages"

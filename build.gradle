@@ -43,7 +43,7 @@ def makeTar = { File tarFile, String arcName, File sourceDir ->
 
 // Generate .SRCINFO content from PKGBUILD data (no makepkg required)
 def makeSrcInfo = { String pkgver, String pkgrel, String md5 ->
-    def depends = ["python-pyqt6", "mpv", "ffmpeg"]
+    def depends = ["python-pyqt6", "mpv", "ffmpeg", "python-numpy", "python-sounddevice"]
     def depLines = depends.collect { "\tdepends = ${it}" }.join("\n")
 """\
 pkgbase = easyplayer
@@ -147,6 +147,13 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
             copy {
                 from "build/DEB-template/debian/copyright"
                 into "${ubuStage}/debian"
+            }
+
+            if (!cfg.libs.contains("python3-sounddevice")) {
+                copy {
+                    from "build/DEB-template/debian/postinst"
+                    into "${ubuStage}/debian"
+                }
             }
 
             def tarFile = file("${debOut}/${buildName}.tar")

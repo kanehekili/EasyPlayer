@@ -30,7 +30,7 @@ from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
 import sys, json, FFMPEGTools, getopt, traceback, locale, os, re
-from threading import Condition
+from threading import Condition, Lock
 from QtTools import SliderThread
 
 
@@ -51,6 +51,13 @@ def get_process_address(_, name):
 
 
 PLAYLIST_EXTENSIONS = {'.m3u', '.m3u8', '.pls', '.xspf'}
+
+try:
+    import numpy as np
+    import sounddevice as sd
+    HAS_SPECTRUM = True
+except ImportError:
+    HAS_SPECTRUM = False
 
 
 def _parsePlaylist(path):
@@ -100,8 +107,48 @@ def _parsePlaylist(path):
     return entries
 
 
+class SpectrumOverlay(QtWidgets.QWidget):
+    BAND_EDGES = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 14000,14500, 15000, 16000]
+    BANDS = len(BAND_EDGES)-1
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._mags = [0.0] * self.BANDS
+        self._lock = Lock()
+
+    def setMags(self, mags):
+        with self._lock:
+            self._mags = mags[:]
+        self.update()
+
+    def clearMags(self):
+        with self._lock:
+            self._mags = [0.0] * self.BANDS
+        self.update()
+
+    def paintEvent(self, event):
+        with self._lock:
+            mags = self._mags[:]
+        painter = QtGui.QPainter(self)
+        painter.fillRect(self.rect(), QtGui.QColor(15, 15, 15))
+        w, h = self.width(), self.height()
+        bar_w = w // self.BANDS
+        gap = max(2, bar_w // 8)
+        for i, level in enumerate(mags):
+            bar_h = max(2, int(level * 0.8 * (h - 4)))
+            x = i * bar_w + gap
+            y = h - bar_h - 2
+            r = min(255, int(level * 2 * 255))
+            g = min(255, int((1.0 - level) * 2 * 255))
+            painter.fillRect(x, y, bar_w - gap * 2, bar_h, QtGui.QColor(r, g, 0))
+        painter.end()
+
+
 class Player(QOpenGLWidget):
     ERR_IDS = ["No video or audio streams selected.", "Failed to recognize file format."]
+    SPECTRUM_SAMPLE_RATE = 44100
+    SPECTRUM_BLOCK_SIZE = 4096
     triggerUpdate = pyqtSignal(float)
     triggerInitialized = pyqtSignal()
     fileLoaded = pyqtSignal()
@@ -129,7 +176,10 @@ class Player(QOpenGLWidget):
         self.lastError = None
         self.isAudioOnly = False
         self.durString = "00:00:00"
-        self._opengl_fbo=None
+        self._opengl_fbo = None
+        self._specStream = None
+        self._specOverlay = SpectrumOverlay(self)
+        self._specOverlay.hide()
         
     def initializeGL(self) -> None:
         self.ctx = MpvRenderContext(
@@ -208,12 +258,90 @@ class Player(QOpenGLWidget):
         sc = self.devicePixelRatio()
         pw = int(w * sc)
         ph = int(h * sc)
-        self._opengl_fbo = {'w': pw, 'h': ph, 'fbo': self.defaultFramebufferObject()}        
+        self._opengl_fbo = {'w': pw, 'h': ph, 'fbo': self.defaultFramebufferObject()}
+        self._specOverlay.setGeometry(0, 0, w, h)        
         
 
     def paintGL(self):
         if self.ctx and self._opengl_fbo:
-            self.ctx.render(flip_y=True, opengl_fbo=self._opengl_fbo)
+            fbo = {**self._opengl_fbo, 'fbo': self.defaultFramebufferObject()}
+            self.ctx.render(flip_y=True, opengl_fbo=fbo)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+    def startCapture(self):
+        if not HAS_SPECTRUM or self._specStream is not None:
+            return
+        try:
+            device = self._findMonitorDevice()
+            if device and isinstance(device, str):
+                os.environ['PULSE_SOURCE'] = device
+                device = 'pulse'
+            self._specStream = sd.InputStream(
+                device=device,
+                samplerate=self.SPECTRUM_SAMPLE_RATE,
+                channels=1,
+                blocksize=self.SPECTRUM_BLOCK_SIZE,
+                dtype='float32',
+                callback=self._audioCallback
+            )
+            self._specStream.start()
+            self._specOverlay.show()
+        except Exception:
+            Log.exception("Spectrum capture failed")
+
+    def stopCapture(self):
+        if self._specStream:
+            try:
+                self._specStream.stop()
+                self._specStream.close()
+            except Exception:
+                pass
+            self._specStream = None
+        self._specOverlay.hide()
+        self._specOverlay.clearMags()
+
+    def _findMonitorDevice(self):
+        try:
+            import subprocess
+            result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                monitor = result.stdout.strip() + '.monitor'
+                Log.info("Spectrum: using monitor source %s", monitor)
+                return monitor
+        except Exception:
+            pass
+        Log.info("Spectrum: no monitor device found, using default input")
+        return None
+
+    def _audioCallback(self, indata, frames, time, status):
+        data = indata[:, 0]
+        windowed = data * np.hanning(len(data))
+        fft_data = np.abs(np.fft.rfft(windowed))
+        freqs = np.fft.rfftfreq(len(data), 1.0 / self.SPECTRUM_SAMPLE_RATE)
+        DB_FLOOR = -60.0
+        reference = self.SPECTRUM_BLOCK_SIZE / 4.0
+        new_mags = []
+        for i in range(SpectrumOverlay.BANDS):
+            mask = (freqs >= SpectrumOverlay.BAND_EDGES[i]) & (freqs < SpectrumOverlay.BAND_EDGES[i + 1])
+            if mask.any():
+                val = float(np.max(fft_data[mask])) / reference
+                db = 20.0 * np.log10(val) if val > 0 else DB_FLOOR
+                if i >= SpectrumOverlay.BANDS - 6:
+                    db += 18.0
+                new_mags.append(max(0.0, min(1.0, (db - DB_FLOOR) / -DB_FLOOR)))
+            else:
+                new_mags.append(0.0)
+        overlay = self._specOverlay
+        with overlay._lock:
+            for i in range(SpectrumOverlay.BANDS):
+                if new_mags[i] > overlay._mags[i]:
+                    overlay._mags[i] = overlay._mags[i] + 0.5 * (new_mags[i] - overlay._mags[i]) #0.3
+                else:
+                    overlay._mags[i] = overlay._mags[i] * 0.95  #0.85
+        overlay.update()
+
                   
     def do_update(self):
         self.update()
@@ -274,6 +402,7 @@ class Player(QOpenGLWidget):
             self.lastError = "Invalid media file"
             self.onError.emit(self.lastError)
         self.fileLoaded.emit()
+
 
     def _onTimePos(self, _name, val):
         if val is not None:
@@ -427,6 +556,7 @@ class Player(QOpenGLWidget):
                 self.seekLock.notify_all() 
 
 
+
 class MainFrame(QtWidgets.QMainWindow):
     SLIDER_RESOLUTION = 1000 * 1000
     
@@ -451,10 +581,6 @@ class MainFrame(QtWidgets.QMainWindow):
         self.loadAction.setShortcut('Ctrl+L')
         self.loadAction.triggered.connect(self.loadFile)
         
-        # self.exitAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("buttonStop")), 'Exit', self)
-        # self.exitAction.setShortcut('Ctrl+Q')
-        # self.exitAction.triggered.connect(QApplication.quit)        
-        
         self.playAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("playStart")), 'Play media (toggle with space)', self)
         self.shortcutPlay = QtGui.QShortcut(QtGui.QKeySequence("Space"), self)
         self.shortcutPlay.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
@@ -478,13 +604,11 @@ class MainFrame(QtWidgets.QMainWindow):
         self.mediaSettings.triggered.connect(self._openMediaSettings)
 
         style = self.style()
-        #self.prevTrackAction = QtGui.QAction(style.standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipBackward), 'Previous track', self)
         self.prevTrackAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("prev")), 'Previous track', self)
         self.prevTrackAction.setShortcut('Ctrl+Left')
         self.prevTrackAction.triggered.connect(self.player.prevTrack)
         self.prevTrackAction.setEnabled(False)
 
-        #self.nextTrackAction = QtGui.QAction(style.standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MediaSkipForward), 'Next track', self)
         self.nextTrackAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("next")), 'Next track', self)
         self.nextTrackAction.setShortcut('Ctrl+Right')
         self.nextTrackAction.triggered.connect(self.player.nextTrack)
@@ -495,12 +619,13 @@ class MainFrame(QtWidgets.QMainWindow):
         self.languagebox.setToolTip("Select audio")
 
         '''
-        self.checkSubtitle = QtWidgets.QCheckBox("Subtitles")
-        self.checkSubtitle.setChecked(False)
-        self.checkSubtitle.setToolTip("Subtitles")
-        self.checkSubtitle.stateChanged.connect(self._onSubtitleChanged)
+        self.eqAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("eq")), 'Spectrum analyzer', self)
+        self.eqAction.setCheckable(True)
+        self.eqAction.setChecked(self.settings.hasEQ())
+        self.eqAction.setEnabled(HAS_SPECTRUM)
+        self.eqAction.toggled.connect(self.settings.setEQ)
         '''
-
+        
         self.toolbar = self.addToolBar('Main')
         self.toolbar.addAction(self.loadAction)
         self.toolbar.addSeparator()
@@ -512,10 +637,11 @@ class MainFrame(QtWidgets.QMainWindow):
         self.toolbar.addSeparator()
         self.toolbar.addAction(self.mediaSettings)
         self.toolbar.addWidget(self.languagebox)
-        '''
         self.toolbar.addSeparator()
-        self.toolbar.addWidget(self.checkSubtitle)
-        '''
+        #self.toolbar.addAction(self.eqAction)
+        spacer = QtWidgets.QWidget()
+        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        self.toolbar.addWidget(spacer)
         self.toolbar.addAction(self.fsAction)
 
         color = self.toolbar.palette().color(QtGui.QPalette.ColorRole.Window)
@@ -547,7 +673,7 @@ class MainFrame(QtWidgets.QMainWindow):
         self.ui_InfoLabel.setToolTip("Infos about the media position")
         rowLayout.addWidget(self.ui_NowPlaying)
         rowLayout.addWidget(self.ui_InfoLabel)
-        
+
         self._createSlider()
        
         box = self._makeLayout()
@@ -601,7 +727,8 @@ class MainFrame(QtWidgets.QMainWindow):
             self._onSubtitleChanged(True)
         
     def _prepareNextStream(self, streamData):
-        isVideo = not self.player.isAudioOnly
+        isAudio = self.player.isAudioOnly
+        isVideo = not isAudio
         self.languagebox.setEnabled(isVideo)
         self.photoAction.setEnabled(isVideo)
         hasPlaylist = self.player.isPlaylist and len(self.player.mpv.playlist) > 1
@@ -609,6 +736,8 @@ class MainFrame(QtWidgets.QMainWindow):
         self.nextTrackAction.setEnabled(hasPlaylist)
         if not hasPlaylist:
             self.ui_NowPlaying.setText("")
+        if not isAudio:
+            self.player.stopCapture()
         if isVideo:
             self._updateLang(streamData)
 
@@ -642,7 +771,10 @@ class MainFrame(QtWidgets.QMainWindow):
 
     # #settings callback 2
     def _onEQChanged(self, isSelected):
-        print("Should be EQ:", isSelected)
+        if isSelected and self.player.isAudioOnly:
+            self.player.startCapture()
+        else:
+            self.player.stopCapture()
 
     def _createSlider(self):
         self.ui_Slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -679,7 +811,6 @@ class MainFrame(QtWidgets.QMainWindow):
         btn1Box.addWidget(self.uiStopButton)
         '''
         mainBox.addWidget(self.player)
-        #mainBox.addWidget(self.ui_InfoLabel)
         mainBox.addWidget(self.ui_InfoRow)
         mainBox.addWidget(self.ui_Slider)
         return mainBox
@@ -726,9 +857,15 @@ class MainFrame(QtWidgets.QMainWindow):
         if isPlaying:
             self.__enableActionsOnVideoPlay(False)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playPause")))
+            if self.player.isAudioOnly:
+                if not HAS_SPECTRUM:
+                    self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy and sounddevice")
+                elif self.settings.hasEQ():
+                    self.player.startCapture()
         else:
             self.__enableActionsOnVideoPlay(True)
-            self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playStart")))             
+            self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playStart")))
+            self.player.stopCapture()             
 
     # manual slider - sync with gui    
     def _onSliderMoved(self, pos):
@@ -762,7 +899,8 @@ class MainFrame(QtWidgets.QMainWindow):
     
     @pyqtSlot(str)
     def _onPlayerError(self, errorMsg):
-        self.getErrorDialog("Invalid file", "Not a valid codec found", "on_player error").show()
+        Log.error("MPV error: %s",errorMsg)
+        self.getErrorDialog("Invalid file", "Not a valid codec found", errorMsg).show()
     
     def __enableActionsOnVideoPlay(self, enable):
         self.loadAction.setEnabled(enable)
@@ -951,7 +1089,7 @@ class SettingsModel(QtCore.QObject):
         # keep flags- save them later
         super(SettingsModel, self).__init__()
         self.iconSet = ep_config.get("icoSet", IconMapper.DEFAULT)
-        self.showEQ = ep_config.getBoolean("showEQ", False)
+        self.showEQ = ep_config.getBoolean("showEQ", True)
         self.mainFrame = mainframe
         self.showSubs = ep_config.getBoolean("subtitles", False)  # id if subtitle should be presented. mpv only
         self.isoCodes = []
@@ -1046,7 +1184,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setIconTheme.setToolTip("Select icon theme - restart to take effect")
 
         clickBox = QtWidgets.QVBoxLayout(frame1)
-        # clickBox.addWidget(self.showEQ)
+        clickBox.addWidget(self.showEQ)
         clickBox.addWidget(self.showSub)
 
         subBox = QtWidgets.QVBoxLayout(frame2)

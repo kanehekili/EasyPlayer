@@ -1,7 +1,7 @@
 # EasyPlayer
-Version 1.0.0
+Version 1.1.0
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.0.1/easyplayer1.0.1.tar)
+![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.1.0/easyplayer1.1.0.tar)
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
@@ -30,6 +30,7 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 * Subtitles can be shown (settings)
 * Flat and non flat icon set
 * Language can be selected
+* Supports an EQ-display for audio files - Some distros need to install python3-sounddevice via pip. (Not mandatory) 
 
 ### Virtualenv or conda 
 The fast remux binary doesn't run in a virtual environment, since the ffmpeg libraries used are not available. The ffmpeg blob could be used, if it would be on the /usr/bin path on the host system. Cross OS binary calls tend be a lot slower that in the native environment - so this software is limited to Linux (native or virtualized)
@@ -93,7 +94,10 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
 ### Changes 
-09.03.2025
+12.03.2026
+* Graphic EQ display for audio files 
+
+09.03.2026
 * Support for playlists and streams
 
 05.03.2026

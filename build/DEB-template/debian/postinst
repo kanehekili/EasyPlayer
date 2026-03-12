@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+echo ""
+echo "EasyPlayer: The spectrum analyzer requires the 'sounddevice' Python package,"
+echo "which is not available via apt on this distro. To enable it, run:"
+echo "  sudo pip install sounddevice --break-system-packages"
+echo ""
