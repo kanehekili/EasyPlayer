@@ -2,7 +2,7 @@ rootProject.name = "easyplayer"
 
 // ── Release config ────────────────────────────────────────────────────────────
 // Edit version / pkgrelease here, then run:  gradle build_all
-gradle.ext.version    = "1.1.0"
+gradle.ext.version    = "1.2.0"
 gradle.ext.pkgrelease = "1"
 
 // ── Target distros ────────────────────────────────────────────────────────────
@@ -11,25 +11,30 @@ gradle.ext.pkgrelease = "1"
 gradle.ext.distros = [
 
     arch: [
-        type: "arch",
+        type:    "arch",
+        libs:    "python-pyqt6, mpv, ffmpeg",
+        optLibs: "python-numpy: spectrum analyzer, python-sounddevice: spectrum analyzer, alsa-plugins: spectrum analyzer on PipeWire systems",
     ],
 
     ubu0: [
         type:     "ubuntu",
         codename: "noble",
-        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, python3-numpy, pulseaudio-utils",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
+        optLibs:  "python3-numpy",
     ],
 
     ubu1: [
         type:     "ubuntu",
         codename: "questing",
-        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, python3-numpy, pulseaudio-utils",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
+        optLibs:  "python3-numpy",
     ],
 
     ubu2: [
         type:     "ubuntu",
         codename: "resolute",
-        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, python3-numpy, pulseaudio-utils, python3-sounddevice",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
+        optLibs:  "python3-numpy, python3-sounddevice",
     ],
 
 ]

@@ -8,6 +8,7 @@ Standards-Version: 3.0.0
 Package: easyplayer
 Architecture: amd64 arm64 armhf
 Depends: @xlibsx@, ${shlibs:Depends}, ${misc:Depends}
+Suggests: @xoptlibsx@
 Description: Simple video and audio player based on mpv
 Section: video
 Priority: optional

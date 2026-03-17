@@ -1,11 +1,15 @@
 # EasyPlayer
-Version 1.1.0
+Version 1.2.0
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.1.0/easyplayer1.1.0.tar)
+![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.2.0/easyplayer1.2.0.tar)
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
 ![Screenshot](https://github.com/kanehekili/EasyPlayer/blob/main/easyplayer.png)
+
+Configurable Spectrum Analyzer:
+
+![Screenshot](https://github.com/kanehekili/EasyPlayer/blob/main/spectrum.png)
 
 ### Prerequisites
 * Arch: python3, python-pillow and mpv
@@ -20,7 +24,7 @@ A simple video and audio player based on mpv and QT6 . It is a spin off of my Vi
 If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might set QT_QPA_PLATFORMTHEME:
 * Depending on the distro and version this variable may be defined with one of:
 * gtk2, qt6ct, fusion, gtk3
-* VideoCut will enforce "QT_QPA_PLATFORM=xcb" on Wayland for SSD decorations.
+* Easyplayer will enforce "QT_QPA_PLATFORM=xcb" on Wayland for SSD decorations.
 * On Ubuntu 26.04 you need to install qt6-gtk-platformtheme. This will get your GTK theme into any QT6 app. 
 * On Ubuntu(with libadwaita) use /etc/environment to add GTK_THEME=yourTheme to enforce a third party theme. (Hack)
 
@@ -31,9 +35,8 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 * Flat and non flat icon set
 * Language can be selected
 * Supports an EQ-display for audio files - Some distros need to install python3-sounddevice via pip. (Not mandatory) 
+* Colors of the EQ display can be changed live via the settings dialog. 
 
-### Virtualenv or conda 
-The fast remux binary doesn't run in a virtual environment, since the ffmpeg libraries used are not available. The ffmpeg blob could be used, if it would be on the /usr/bin path on the host system. Cross OS binary calls tend be a lot slower that in the native environment - so this software is limited to Linux (native or virtualized)
 
 ### Support for Qemu:
 -v will use a virtual GL driver for rendering. (easyplayer -v)
@@ -51,9 +54,9 @@ sudo apt install --no-install-recommends easyplayer
 Select video and open it with "Open with ->EasyPlayer", oder via terminal "easyplayer"
 
 Remove with:
-`sudo apt remove videocut`
+`sudo apt remove easyplayer`
 
-#### Install VideoCut via AUR (Arch Linux /Manjaro only)
+#### Install EasyPlayer via AUR (Arch Linux /Manjaro only)
 * Use pamac or other GUI tools, search for "easyplayer" in AUR, click install
 * Manually :
     * Download [PKGBUILD ](https://aur.archlinux.org/cgit/aur.git/snapshot/easyplayer.tar.gz)
@@ -94,6 +97,11 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
 ### Changes 
+16.03.2026
+* Configuration of Spectrum EQ
+* Reviewed Pulseaudio dependencies
+* Distro agnostic installation (Debian & Arch)
+
 12.03.2026
 * Graphic EQ display for audio files 
 

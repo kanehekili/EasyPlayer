@@ -110,12 +110,14 @@ def _parsePlaylist(path):
 class SpectrumOverlay(QtWidgets.QWidget):
     BAND_EDGES = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 14000,14500, 15000, 16000]
     BANDS = len(BAND_EDGES)-1
+    BAR_COLORS = ["heat", "rainbow", "blue", "green", "magenta", "red"]
 
     def __init__(self, parent):
         super().__init__(parent)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._mags = [0.0] * self.BANDS
         self._lock = Lock()
+        self.mode = "heat"
 
     def setMags(self, mags):
         with self._lock:
@@ -130,18 +132,43 @@ class SpectrumOverlay(QtWidgets.QWidget):
     def paintEvent(self, event):
         with self._lock:
             mags = self._mags[:]
+        mode = self.mode
         painter = QtGui.QPainter(self)
         painter.fillRect(self.rect(), QtGui.QColor(15, 15, 15))
         w, h = self.width(), self.height()
         bar_w = w // self.BANDS
         gap = max(2, bar_w // 8)
         for i, level in enumerate(mags):
-            bar_h = max(2, int(level * 0.8 * (h - 4)))
+            bar_h = max(2, int(level * 0.9 * (h - 4)))
             x = i * bar_w + gap
             y = h - bar_h - 2
-            r = min(255, int(level * 2 * 255))
-            g = min(255, int((1.0 - level) * 2 * 255))
-            painter.fillRect(x, y, bar_w - gap * 2, bar_h, QtGui.QColor(r, g, 0))
+            if mode=="red":
+                r = min(255, int(level * 2 * 255))
+                g = min(255, int((1.0 - level) * 2 * 255))
+                b= 0
+                color= QtGui.QColor(r, g, b)
+            elif mode== "magenta":
+                r = min(255, int(level * 2 * 255))
+                g = min(255, int((1.0 - level) * 2 * 255))
+                b = min(255, max(0, int((level * 2 - 1) * 255)))
+                color= QtGui.QColor(r, g, b)
+            elif mode=="blue":
+                r = 0
+                g = min(255, int((1.0 - level) * 2 * 255))
+                b = min(255, int(level * 2 * 255))
+                color= QtGui.QColor(r, g, b)
+            elif mode == "rainbow":
+                hue = int(i / SpectrumOverlay.BANDS * 300)  # red→orange→yellow→green→blue→violet
+                color = QtGui.QColor.fromHsv(hue, 220, max(30, int(level * 255)))
+            elif mode == "heat":
+                hue = int((1.0 - level) * 240)  # 240=blue → 0=red
+                color = QtGui.QColor.fromHsv(hue, 255, max(80, int(level * 255)))
+            else: #mode green
+                r = int((1.0 - level) * 255)
+                g = int((1.0 - level * 0.6) * 255)
+                b = 0
+                color= QtGui.QColor(r, g, b)
+            painter.fillRect(x, y, bar_w - gap * 2, bar_h, color)
         painter.end()
 
 
@@ -289,7 +316,7 @@ class Player(QOpenGLWidget):
             self._specStream.start()
             self._specOverlay.show()
         except Exception:
-            Log.exception("Spectrum capture failed")
+            Log.warning("Spectrum capture failed - no valid device found")
 
     def stopCapture(self):
         if self._specStream:
@@ -302,25 +329,54 @@ class Player(QOpenGLWidget):
         self._specOverlay.hide()
         self._specOverlay.clearMags()
 
-    def _findMonitorDevice(self):
+    def _findMonitorDevicex(self):
+        Log.info("Available SD devices: %s", sd.query_devices())
         try:
             import subprocess
             result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 monitor = result.stdout.strip() + '.monitor'
-                Log.info("Spectrum: using monitor source %s", monitor)
-                return monitor
+                devices = sd.query_devices()
+                for i, dev in enumerate(devices):
+                    if monitor in dev['name'] and dev['max_input_channels'] > 0:
+                        Log.info("Spectrum: using monitor device [%d] %s", i, dev['name'])
+                        return i
         except Exception:
             pass
-        Log.info("Spectrum: no monitor device found, using default input")
+        Log.info("Spectrum: no monitor device found")
         return None
+    
+    def _findMonitorDevice(self):
+        #Log.info("Available SD devices: %s", sd.query_devices())
+        try:
+            import subprocess
+            result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
+            if result.returncode == 0:
+                monitor = result.stdout.strip() + '.monitor'
+                devices = sd.query_devices()
+                # PipeWire: monitor source appears directly in device list
+                for i, dev in enumerate(devices):
+                    if monitor in dev['name'] and dev['max_input_channels'] > 0:
+                        Log.info("Spectrum: using monitor device [%d] %s", i, dev['name'])
+                        return i
+                # PulseAudio: use 'pulse' ALSA device with PULSE_SOURCE
+                for i, dev in enumerate(devices):
+                    if dev['name'].strip() == 'pulse' and dev['max_input_channels'] > 0:
+                        os.environ['PULSE_SOURCE'] = monitor
+                        Log.info("Spectrum: using pulse with monitor source %s", monitor)
+                        return monitor
+        except Exception:
+            pass
+        Log.info("Spectrum: no monitor device found")
+        return None
+    
 
     def _audioCallback(self, indata, frames, time, status):
         data = indata[:, 0]
         windowed = data * np.hanning(len(data))
         fft_data = np.abs(np.fft.rfft(windowed))
         freqs = np.fft.rfftfreq(len(data), 1.0 / self.SPECTRUM_SAMPLE_RATE)
-        DB_FLOOR = -60.0
+        DB_FLOOR = -80.0
         reference = self.SPECTRUM_BLOCK_SIZE / 4.0
         new_mags = []
         for i in range(SpectrumOverlay.BANDS):
@@ -328,8 +384,13 @@ class Player(QOpenGLWidget):
             if mask.any():
                 val = float(np.max(fft_data[mask])) / reference
                 db = 20.0 * np.log10(val) if val > 0 else DB_FLOOR
-                if i >= SpectrumOverlay.BANDS - 6:
+                '''
+                if i >= SpectrumOverlay.BANDS - 4:                                                                                                                                                               
+                    db += 30.0                                                                                                                                                                                   
+                elif i >= SpectrumOverlay.BANDS - 6:
                     db += 18.0
+                '''
+                db += i*5
                 new_mags.append(max(0.0, min(1.0, (db - DB_FLOOR) / -DB_FLOOR)))
             else:
                 new_mags.append(0.0)
@@ -542,6 +603,7 @@ class Player(QOpenGLWidget):
             "opengl_early_flush":'yes'
             }
         if isVirtual:
+            Log.info("Runs in VIRTGL mode")
             kwArgs['gpu-dumb-mode'] = 'yes'
             kwArgs['vd-lavc-dr'] = 'no'
         return kwArgs
@@ -776,6 +838,9 @@ class MainFrame(QtWidgets.QMainWindow):
         else:
             self.player.stopCapture()
 
+    def _onSpectrumModeChanged(self, mode):
+        self.player._specOverlay.mode = mode
+
     def _createSlider(self):
         self.ui_Slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         # contribution:
@@ -823,7 +888,7 @@ class MainFrame(QtWidgets.QMainWindow):
     
     def loadFile(self):
         initalPath = self.player.getSourceDir()
-        fileFilter = "Media & Playlists (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.mp3 *.flac *.ogg *.wav *.aac *.m3u *.m3u8 *.pls *.xspf);;Playlists (*.m3u *.m3u8 *.pls *.xspf);;All files (*)"
+        fileFilter = "Media & Playlists (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.m2t *.mp3 *.flac *.ogg *.wav *.aac *.m3u *.m3u8 *.pls *.xspf);;Playlists (*.m3u *.m3u8 *.pls *.xspf);;All files (*)"
         result = QtWidgets.QFileDialog.getOpenFileName(parent=self, directory=initalPath, caption="Load Media", filter=fileFilter)
         if result[0]:
             fn = self.__encodeQString(result)
@@ -912,6 +977,8 @@ class MainFrame(QtWidgets.QMainWindow):
         self.player.playlistTrackChanged.connect(self.ui_NowPlaying.setText)
         self.settings.changeEQ.connect(self._onEQChanged)
         self.settings.changeSub.connect(self._onSubtitleChanged)
+        self.settings.changeSpectrum.connect(self._onSpectrumModeChanged)
+        self.player._specOverlay.mode = self.settings.getSpectrumMode()
         QtCore.QTimer.singleShot(10, lambda: self._switchStream(self.player.filePath))
     
     def asyncPlay(self):
@@ -1084,7 +1151,8 @@ class Worker(QThread):
 class SettingsModel(QtCore.QObject):
     changeSub = pyqtSignal(object)
     changeEQ = pyqtSignal(object)
-    
+    changeSpectrum = pyqtSignal(str)
+
     def __init__(self, mainframe):
         # keep flags- save them later
         super(SettingsModel, self).__init__()
@@ -1092,6 +1160,7 @@ class SettingsModel(QtCore.QObject):
         self.showEQ = ep_config.getBoolean("showEQ", True)
         self.mainFrame = mainframe
         self.showSubs = ep_config.getBoolean("subtitles", False)  # id if subtitle should be presented. mpv only
+        self.spectrumMode = ep_config.get("spectrumMode", "heat")
         self.isoCodes = []
     
     def sync(self):
@@ -1105,6 +1174,7 @@ class SettingsModel(QtCore.QObject):
         else:
             ep_config.set("subtitles", "False")
         
+        ep_config.set("spectrumMode", self.spectrumMode)
         # SET the icoset
         ep_config.set("icoSet", self.iconSet)
         
@@ -1130,7 +1200,15 @@ class SettingsModel(QtCore.QObject):
         
     def setIconSet(self, icoType):
         self.iconSet = icoType
-        self.__update() 
+        self.__update()
+
+    def getSpectrumMode(self):
+        return self.spectrumMode
+
+    def setSpectrumMode(self, mode):
+        self.spectrumMode = mode
+        self.__update()
+        self.changeSpectrum.emit(mode)
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -1165,7 +1243,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.showEQ = QtWidgets.QCheckBox("Show EQ - Audio only")
         self.showEQ.setToolTip("Display an EQ on music")
         self.showEQ.setChecked(self.model.hasEQ())
-        self.showEQ.stateChanged.connect(self._onEQChanged)  
+        self.showEQ.stateChanged.connect(self._onEQChanged)
+
+        spectrumLabel = QtWidgets.QLabel("Spectrum color:")
+        self.spectrumMode = QtWidgets.QComboBox()
+        for m in SpectrumOverlay.BAR_COLORS:
+            self.spectrumMode.addItem(m)
+        self.spectrumMode.setCurrentText(self.model.getSpectrumMode())
+        self.spectrumMode.currentTextChanged.connect(self._onSpectrumModeChanged)
 
         self.showSub = QtWidgets.QCheckBox("Show subtitles")
         self.showSub.setToolTip("Toggle show subtitles")
@@ -1185,6 +1270,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
         clickBox = QtWidgets.QVBoxLayout(frame1)
         clickBox.addWidget(self.showEQ)
+        clickBox.addWidget(spectrumLabel)
+        clickBox.addWidget(self.spectrumMode)
         clickBox.addWidget(self.showSub)
 
         subBox = QtWidgets.QVBoxLayout(frame2)
@@ -1206,7 +1293,10 @@ class SettingsDialog(QtWidgets.QDialog):
         
     def _onEQChanged(self, aBool):
         self.model.setEQ(QtCore.Qt.CheckState.Checked.value == aBool)
-        
+
+    def _onSpectrumModeChanged(self, text):
+        self.model.setSpectrumMode(text)
+
     def _onIconThemeChanged(self, text):
         self.model.setIconSet(text)
 
@@ -1356,7 +1446,7 @@ def main():
         ICOMAP = IconMapper(ep_config.get("icoSet", "default"))  
         argv = sys.argv
         res = parseOptions(argv)    
-        FFMPEGTools.setupRotatingLogger(AppName, res["logConsole"])
+        FFMPEGTools.setupRotatingLogger(AppName, res["logConsole"], "EasyPlayer")
         de = OSTools().currentDesktop()
         if de not in OSTools.QT_DESKTOPS:        
             OSTools().setGTKEnvironment()
@@ -1370,7 +1460,7 @@ def main():
         locale.setlocale(locale.LC_NUMERIC, "C")
         fn = res["file"]
         if fn is None:
-            WIN = MainFrame(app)  # keep python reference!
+            WIN = MainFrame(app,None,res['virtual'])  # keep python reference!
         else:
             if not OSTools().isAbsolute(fn):
                 fn = OSTools().joinPathes(localPath, fn)

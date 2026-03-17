@@ -24,6 +24,9 @@ def tok(Map m) { m.collectEntries { k, v -> [k.toString(), v.toString()] } }
 
 def stageDir = { String sub -> file("${outDir}/stage/${sub}") }
 
+// "pkg-a, pkg-b" → "'pkg-a' 'pkg-b'"  (PKGBUILD array format)
+def archPkgFmt = { String s -> s.split(',').collect { "'${it.trim()}'" }.join(' ') }
+
 // Copy *.py sources + icons + lib/mpv.py into a staging directory
 def stageSources = { File dst ->
     copy {
@@ -31,8 +34,8 @@ def stageSources = { File dst ->
         into(dst)
         filter(ReplaceTokens, tokens: tok([xxx: version]))
     }
-    file("${dst}/EasyPlayer.py").setExecutable(true)
-    copy { from "src/icons"      into "${dst}/icons" }
+    //This doesn't work: file("${dst}/EasyPlayer.py").setExecutable(true) -groovy stuff...
+	copy { from "src/icons"      into "${dst}/icons" }
     copy { from "src/lib/mpv.py" into "${dst}/lib"   }
 }
 
@@ -42,9 +45,9 @@ def makeTar = { File tarFile, String arcName, File sourceDir ->
 }
 
 // Generate .SRCINFO content from PKGBUILD data (no makepkg required)
-def makeSrcInfo = { String pkgver, String pkgrel, String md5 ->
-    def depends = ["python-pyqt6", "mpv", "ffmpeg", "python-numpy", "python-sounddevice"]
-    def depLines = depends.collect { "\tdepends = ${it}" }.join("\n")
+def makeSrcInfo = { String pkgver, String pkgrel, String md5, String libs, String optLibs ->
+    def depLines = libs.split(',').collect { "\tdepends = ${it.trim()}" }.join("\n") + "\n" +
+                   optLibs.split(',').collect { "\toptdepends = ${it.trim()}" }.join("\n")
 """\
 pkgbase = easyplayer
 \tpkgdesc = Simple video and audio player based on mpv
@@ -96,13 +99,20 @@ tasks.register("build_aur") {
         def md5 = computeMD5(tarFile)
         println "  AUR source tarball : ${tarFile.name}  md5=${md5}"
 
+        def archCfg = distros['arch']
         copy {
             from "build/AUR-template/PKGBUILD"
             into aurOut
-            filter(ReplaceTokens, tokens: tok([xxx: version, xpkgrelx: pkgrelease, md5sum: md5]))
+            filter(ReplaceTokens, tokens: tok([
+                xxx      : version,
+                xpkgrelx : pkgrelease,
+                md5sum   : md5,
+                xlibsx   : archPkgFmt(archCfg.libs),
+                xoptlibsx: archPkgFmt(archCfg.optLibs),
+            ]))
         }
 
-        file("${aurOut}/.SRCINFO").text = makeSrcInfo(version, pkgrelease, md5)
+        file("${aurOut}/.SRCINFO").text = makeSrcInfo(version, pkgrelease, md5, archCfg.libs, archCfg.optLibs)
         println "  .SRCINFO generated"
 
         delete stage
@@ -136,12 +146,14 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
                 from "build/DEB-template/debian"
                 into "${ubuStage}/debian"
                 exclude "copyright"
+                exclude "postinst"
                 filter(ReplaceTokens, tokens: tok([
                     ubu      : cfg.codename,
                     xxx      : version,
                     xpkgrelx : pkgrelease,
                     xtsx     : timestamp,
                     xlibsx   : cfg.libs,
+                    xoptlibsx: cfg.optLibs,
                 ]))
             }
             copy {
@@ -149,7 +161,7 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
                 into "${ubuStage}/debian"
             }
 
-            if (!cfg.libs.contains("python3-sounddevice")) {
+            if (!cfg.optLibs?.contains("python3-sounddevice")) {
                 copy {
                     from "build/DEB-template/debian/postinst"
                     into "${ubuStage}/debian"
