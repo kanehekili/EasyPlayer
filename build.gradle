@@ -177,39 +177,6 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
     }
 }
 
-// ── PyPI ──────────────────────────────────────────────────────────────────────
-
-tasks.register("build_pypi") {
-    description = "Generate dist/PYPI/ – ready for: pip install . or python -m build"
-    group       = "packaging"
-
-    doLast {
-        def pypiRoot = file("${outDir}/PYPI/easyplayer")
-        def pkgDir   = file("${pypiRoot}/easyplayer")
-        pkgDir.mkdirs()
-
-        stageSources(pkgDir)
-
-        // Package marker so Python treats the directory as a package
-        file("${pkgDir}/__init__.py").text = ""
-
-        // Expand pyproject.toml / MANIFEST.in templates
-        copy {
-            from "build/pypi-template"
-            into pypiRoot
-            filter(ReplaceTokens, tokens: tok([xxx: version]))
-        }
-
-        if (file("README.md").exists()) {
-            copy { from "README.md" into pypiRoot }
-        }
-
-        println "  → dist/PYPI/easyplayer/"
-        println "    build:   cd dist/PYPI/easyplayer && python -m build"
-        println "    upload:  twine upload dist/*"
-    }
-}
-
 // ── aggregate ─────────────────────────────────────────────────────────────────
 
 tasks.register("clean") {
@@ -219,7 +186,7 @@ tasks.register("clean") {
 }
 
 tasks.register("build_all") {
-    description = "Build all packages: AUR, DEB x${distros.count { it.value.type == 'ubuntu' }}, PyPI"
+    description = "Build all packages: AUR, DEB x${distros.count { it.value.type == 'ubuntu' }}"
     group       = "packaging"
     dependsOn "updateMPV"
     dependsOn tasks.matching { t -> t.name.startsWith("build_") && t.name != "build_all" }
