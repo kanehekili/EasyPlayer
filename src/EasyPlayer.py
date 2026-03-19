@@ -302,9 +302,6 @@ class Player(QOpenGLWidget):
             return
         try:
             device = self._findMonitorDevice()
-            if device and isinstance(device, str):
-                os.environ['PULSE_SOURCE'] = device
-                device = 'pulse'
             self._specStream = sd.InputStream(
                 device=device,
                 samplerate=self.SPECTRUM_SAMPLE_RATE,
@@ -359,12 +356,12 @@ class Player(QOpenGLWidget):
                     if monitor in dev['name'] and dev['max_input_channels'] > 0:
                         Log.info("Spectrum: using monitor device [%d] %s", i, dev['name'])
                         return i
-                # PulseAudio: use 'pulse' ALSA device with PULSE_SOURCE
+                # PulseAudio/PipeWire: use 'pulse' or 'pipewire' ALSA device with PULSE_SOURCE
                 for i, dev in enumerate(devices):
-                    if dev['name'].strip() == 'pulse' and dev['max_input_channels'] > 0:
+                    if dev['name'].strip() in ('pulse', 'pipewire') and dev['max_input_channels'] > 0:
                         os.environ['PULSE_SOURCE'] = monitor
-                        Log.info("Spectrum: using pulse with monitor source %s", monitor)
-                        return monitor
+                        Log.info("Spectrum: using %s with monitor source %s", dev['name'].strip(), monitor)
+                        return dev['name'].strip()
         except Exception:
             pass
         Log.info("Spectrum: no monitor device found")
@@ -375,6 +372,9 @@ class Player(QOpenGLWidget):
         data = indata[:, 0]
         windowed = data * np.hanning(len(data))
         fft_data = np.abs(np.fft.rfft(windowed))
+        
+        #Log.debug("Spectrum peak: %.6f  fft_max: %.1f", float(np.max(np.abs(data))), float(np.max(np.abs(np.fft.rfft(data)))))       
+        
         freqs = np.fft.rfftfreq(len(data), 1.0 / self.SPECTRUM_SAMPLE_RATE)
         DB_FLOOR = -80.0
         reference = self.SPECTRUM_BLOCK_SIZE / 4.0
@@ -390,7 +390,7 @@ class Player(QOpenGLWidget):
                 elif i >= SpectrumOverlay.BANDS - 6:
                     db += 18.0
                 '''
-                db += i*5
+                #db += i*5
                 new_mags.append(max(0.0, min(1.0, (db - DB_FLOOR) / -DB_FLOOR)))
             else:
                 new_mags.append(0.0)

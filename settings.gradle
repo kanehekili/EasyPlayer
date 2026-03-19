@@ -20,14 +20,14 @@ gradle.ext.distros = [
         type:     "ubuntu",
         codename: "noble",
         libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
-        optLibs:  "python3-numpy",
+        optLibs:  "python3-numpy,libportaudio2, python3-pip",
     ],
 
     ubu1: [
         type:     "ubuntu",
         codename: "questing",
         libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
-        optLibs:  "python3-numpy",
+        optLibs:  "python3-numpy, libportaudio2, python3-pip",
     ],
 
     ubu2: [
