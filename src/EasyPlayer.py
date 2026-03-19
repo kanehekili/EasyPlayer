@@ -29,8 +29,8 @@ from PyQt6.QtCore import QByteArray, pyqtSignal, pyqtSlot, QThread
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
-import sys, json, FFMPEGTools, getopt, traceback, locale, os, re
-from threading import Condition, Lock
+import sys, json, FFMPEGTools, getopt, traceback, locale, os, re, subprocess
+from threading import Condition, Lock, Thread
 from QtTools import SliderThread
 
 
@@ -54,10 +54,51 @@ PLAYLIST_EXTENSIONS = {'.m3u', '.m3u8', '.pls', '.xspf'}
 
 try:
     import numpy as np
-    import sounddevice as sd
     HAS_SPECTRUM = True
 except ImportError:
     HAS_SPECTRUM = False
+
+try:
+    import sounddevice as sd
+    HAS_SD = True
+except ImportError:
+    HAS_SD = False
+
+
+class ParecStream:
+    def __init__(self, device, samplerate, blocksize, callback):
+        self._proc = subprocess.Popen(
+            ['parec', f'--device={device}', '--format=float32le',
+             '--channels=1', f'--rate={samplerate}', '--latency-msec=20'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        )
+        self._blocksize = blocksize
+        self._callback = callback
+        self._stopped = False
+        self._thread = Thread(target=self._loop, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stopped = True
+        self._proc.terminate()
+
+    def close(self):
+        try:
+            self._proc.wait(timeout=1)
+        except Exception:
+            pass
+
+    def _loop(self):
+        bytes_per_block = self._blocksize * 4
+        while not self._stopped:
+            data = self._proc.stdout.read(bytes_per_block)
+            if not data or len(data) < bytes_per_block:
+                break
+            if not self._stopped:
+                arr = np.frombuffer(data, dtype='float32').reshape(-1, 1)
+                self._callback(arr, self._blocksize, None, None)
 
 
 def _parsePlaylist(path):
@@ -302,14 +343,25 @@ class Player(QOpenGLWidget):
             return
         try:
             device = self._findMonitorDevice()
-            self._specStream = sd.InputStream(
-                device=device,
-                samplerate=self.SPECTRUM_SAMPLE_RATE,
-                channels=1,
-                blocksize=self.SPECTRUM_BLOCK_SIZE,
-                dtype='float32',
-                callback=self._audioCallback
-            )
+            if device and isinstance(device, str) and device.endswith('.monitor'):
+                self._specStream = ParecStream(
+                    device,
+                    self.SPECTRUM_SAMPLE_RATE,
+                    self.SPECTRUM_BLOCK_SIZE,
+                    self._audioCallback
+                )
+            elif HAS_SD:
+                self._specStream = sd.InputStream(
+                    device=device,
+                    samplerate=self.SPECTRUM_SAMPLE_RATE,
+                    channels=1,
+                    blocksize=self.SPECTRUM_BLOCK_SIZE,
+                    dtype='float32',
+                    callback=self._audioCallback
+                )
+            else:
+                Log.warning("Spectrum capture failed - sounddevice not available")
+                return
             self._specStream.start()
             self._specOverlay.show()
         except Exception:
@@ -350,18 +402,22 @@ class Player(QOpenGLWidget):
             result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 monitor = result.stdout.strip() + '.monitor'
-                devices = sd.query_devices()
-                # PipeWire: monitor source appears directly in device list
-                for i, dev in enumerate(devices):
-                    if monitor in dev['name'] and dev['max_input_channels'] > 0:
-                        Log.info("Spectrum: using monitor device [%d] %s", i, dev['name'])
-                        return i
-                # PulseAudio/PipeWire: use 'pulse' or 'pipewire' ALSA device with PULSE_SOURCE
-                for i, dev in enumerate(devices):
-                    if dev['name'].strip() in ('pulse', 'pipewire') and dev['max_input_channels'] > 0:
-                        os.environ['PULSE_SOURCE'] = monitor
-                        Log.info("Spectrum: using %s with monitor source %s", dev['name'].strip(), monitor)
-                        return dev['name'].strip()
+                if HAS_SD:
+                    devices = sd.query_devices()
+                    # PipeWire: monitor source appears directly in device list
+                    for i, dev in enumerate(devices):
+                        if monitor in dev['name'] and dev['max_input_channels'] > 0:
+                            Log.info("Spectrum: using monitor device [%d] %s", i, dev['name'])
+                            return i
+                    # PulseAudio: use 'pulse' ALSA device with PULSE_SOURCE
+                    for i, dev in enumerate(devices):
+                        if dev['name'].strip() == 'pulse' and dev['max_input_channels'] > 0:
+                            os.environ['PULSE_SOURCE'] = monitor
+                            Log.info("Spectrum: using pulse with monitor source %s", monitor)
+                            return 'pulse'
+                # No sounddevice or no matching device: fall back to parec
+                Log.info("Spectrum: using parec with monitor source %s", monitor)
+                return monitor
         except Exception:
             pass
         Log.info("Spectrum: no monitor device found")
@@ -384,13 +440,9 @@ class Player(QOpenGLWidget):
             if mask.any():
                 val = float(np.max(fft_data[mask])) / reference
                 db = 20.0 * np.log10(val) if val > 0 else DB_FLOOR
-                '''
-                if i >= SpectrumOverlay.BANDS - 4:                                                                                                                                                               
-                    db += 30.0                                                                                                                                                                                   
-                elif i >= SpectrumOverlay.BANDS - 6:
-                    db += 18.0
-                '''
-                #db += i*5
+                if i >= SpectrumOverlay.BANDS - 4:
+                    db += 6.0
+                    
                 new_mags.append(max(0.0, min(1.0, (db - DB_FLOOR) / -DB_FLOOR)))
             else:
                 new_mags.append(0.0)
