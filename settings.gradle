@@ -2,7 +2,7 @@ rootProject.name = "easyplayer"
 
 // ── Release config ────────────────────────────────────────────────────────────
 // Edit version / pkgrelease here, then run:  gradle build_all
-gradle.ext.version    = "1.2.0"
+gradle.ext.version    = "1.2.1"
 gradle.ext.pkgrelease = "1"
 
 // ── Target distros ────────────────────────────────────────────────────────────
@@ -19,22 +19,22 @@ gradle.ext.distros = [
     ubu0: [
         type:     "ubuntu",
         codename: "noble",
-        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
-        optLibs:  "python3-numpy,libportaudio2, python3-pip",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils, python3-numpy",
+        optLibs:  "",
     ],
 
     ubu1: [
         type:     "ubuntu",
         codename: "questing",
-        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
-        optLibs:  "python3-numpy, libportaudio2, python3-pip",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils, python3-numpy",
+        optLibs:  "",
     ],
 
     ubu2: [
         type:     "ubuntu",
         codename: "resolute",
-        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils",
-        optLibs:  "python3-numpy, python3-sounddevice",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils,python3-numpy, python3-sounddevice",
+        optLibs:  "",
     ],
 
 ]
