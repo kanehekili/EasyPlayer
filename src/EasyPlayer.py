@@ -31,8 +31,8 @@ from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
 import sys, json, FFMPEGTools, getopt, traceback, locale, os, re, subprocess
 from threading import Condition, Lock, Thread
-from QtTools import SliderThread
-
+from QtTools import SliderThread, installSigIntHandler
+import signal 
 
 global Log
 global AppName
@@ -1503,7 +1503,10 @@ def main():
         if de not in OSTools.QT_DESKTOPS:        
             OSTools().setGTKEnvironment()
             Log.info("GTK based - switched to QT_QPA_PLATFORM = xcb" )
+        os.environ['QT_LOGGING_RULES'] = 'qt.svg=false'
         app = QApplication(argv)
+        sigTimer = installSigIntHandler(app)
+        
         # Set the application name (this sets WM_CLASS)
         app.setApplicationName(AppName)
         # Link to your desktop file (important for GNOME)

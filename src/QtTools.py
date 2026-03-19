@@ -5,6 +5,7 @@ Created on Dec 26, 2025
 '''
 
 from PyQt6 import QtCore, QtGui
+import signal
 
 #takes the requests and only sends the actual framenumber to the player - makes the slider faster and the queue lighter        
 class SliderThread(QtCore.QThread):
@@ -41,6 +42,16 @@ class SliderThread(QtCore.QThread):
         self.pos = fn
         self.condition.wakeOne()#wake up the long wait
         
+def installSigIntHandler(app):
+    """Allow Ctrl+C to quit a PyQt app cleanly.
+    Qt's event loop blocks Python signal handling, so a short timer
+    is used to periodically yield back to the Python interpreter."""
+    signal.signal(signal.SIGINT, lambda *_: app.quit())
+    timer = QtCore.QTimer()
+    timer.start(200)
+    timer.timeout.connect(lambda: None)
+    return timer  # caller must keep a reference to prevent GC
+
 def is_theme_dark(widget):
     """Returns True if the widget's background is dark, False if light."""
     color = widget.palette().color(QtGui.QPalette.ColorRole.Window)

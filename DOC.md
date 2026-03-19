@@ -1,6 +1,6 @@
-# CLAUDE.md
+# DOC.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides technical insights for developers
 
 ## Running the Application
 
