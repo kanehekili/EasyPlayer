@@ -32,7 +32,6 @@ from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
 import sys, json, FFMPEGTools, getopt, traceback, locale, os, re, subprocess
 from threading import Condition, Lock, Thread
 from QtTools import SliderThread, installSigIntHandler
-import signal 
 
 global Log
 global AppName
@@ -83,6 +82,7 @@ class ParecStream:
             self._proc.wait(timeout=1)
         except Exception:
             pass
+        self._thread.join(timeout=1)
 
     def _loop(self):
         bytes_per_block = self._blocksize * 4
@@ -164,7 +164,7 @@ class SpectrumOverlay(QtWidgets.QWidget):
             self._mags = [0.0] * self.BANDS
         self.update()
 
-    def paintEvent(self, event):
+    def paintEvent(self, __event):
         with self._lock:
             mags = self._mags[:]
         mode = self.mode
@@ -304,7 +304,7 @@ class Player(QOpenGLWidget):
             self.seekLock.wait(timeout=3)
             self._muteWhileSeeking(False)
 
-    def _onSeek(self, name, val):
+    def _onSeek(self, __name, val):
         if val == False:
             with self.seekLock:
                 self.seekLock.notify()
@@ -375,7 +375,7 @@ class Player(QOpenGLWidget):
         return None
     
 
-    def _audioCallback(self, indata, frames, time, status):
+    def _audioCallback(self, indata, __frames, __time, __status):
         data = indata[:, 0]
         windowed = data * np.hanning(len(data))
         fft_data = np.abs(np.fft.rfft(windowed))
@@ -398,16 +398,15 @@ class Player(QOpenGLWidget):
                 new_mags.append(max(0.0, min(1.0, (db - DB_FLOOR) / -DB_FLOOR)))
             else:
                 new_mags.append(0.0)
-        overlay = self._specOverlay
-        with overlay._lock:
+        with self._specOverlay._lock:
             riseFactor = 0.5 #how fast bars jump up
             decayFactor = 0.9 #how fast bars fall
             for i in range(SpectrumOverlay.BANDS):
-                if new_mags[i] > overlay._mags[i]:
-                    overlay._mags[i] = overlay._mags[i] + riseFactor * (new_mags[i] - overlay._mags[i]) #0.3
+                if new_mags[i] > self._specOverlay._mags[i]:
+                    self._specOverlay._mags[i] = self._specOverlay._mags[i] + riseFactor * (new_mags[i] - self._specOverlay._mags[i]) #0.3
                 else:
-                    overlay._mags[i] = overlay._mags[i] * decayFactor  #0.85
-        overlay.update()
+                    self._specOverlay._mags[i] = self._specOverlay._mags[i] * decayFactor  #0.85
+        self._specOverlay.update()
 
                   
     def do_update(self):
@@ -510,7 +509,7 @@ class Player(QOpenGLWidget):
             # self.isReadable=res and not broken
             self.isReadable = res     
     
-    def _onDuration(self, name, val):
+    def _onDuration(self, __name, val):
         if val is not None:
             self.duration = val
             Log.info("durance detected:%.3f" % (val))  
@@ -573,6 +572,7 @@ class Player(QOpenGLWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """free mpv_context and terminate player before closing the widget"""
+        self.stopCapture()
         self.ctx.free()
         self.sliderThread.stop()
         self.mpv.terminate()
@@ -614,7 +614,7 @@ class Player(QOpenGLWidget):
             kwArgs['vd-lavc-dr'] = 'no'
         return kwArgs
         
-    def _passLog(self, loglevel, component, message):
+    def _passLog(self, __loglevel, component, message):
         msg = '{}: {}'.format(component, message)
         with self.seekLock:
             if message.strip() in self.ERR_IDS:
@@ -671,7 +671,6 @@ class MainFrame(QtWidgets.QMainWindow):
         self.mediaSettings.setShortcut('Ctrl+T')
         self.mediaSettings.triggered.connect(self._openMediaSettings)
 
-        style = self.style()
         self.prevTrackAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("prev")), 'Previous track', self)
         self.prevTrackAction.setShortcut('Ctrl+Left')
         self.prevTrackAction.triggered.connect(self.player.prevTrack)
@@ -1131,7 +1130,7 @@ class MainFrame(QtWidgets.QMainWindow):
         tx = FFMPEGTools.OSTools().getFileNameOnly(fnName)
         self.setWindowTitle(AppName + " - " + tx)
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(self, __event: QCloseEvent) -> None:
         self.player.closePending = True
 
 
@@ -1459,7 +1458,7 @@ def main():
             Log.info("GTK based - switched to QT_QPA_PLATFORM = xcb" )
         os.environ['QT_LOGGING_RULES'] = 'qt.svg=false'
         app = QApplication(argv)
-        sigTimer = installSigIntHandler(app)
+        app._sigTimer = installSigIntHandler(app)
         
         # Set the application name (this sets WM_CLASS)
         app.setApplicationName(AppName)
