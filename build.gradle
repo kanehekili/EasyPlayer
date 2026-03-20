@@ -146,7 +146,6 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
                 from "build/DEB-template/debian"
                 into "${ubuStage}/debian"
                 exclude "copyright"
-                exclude "postinst"
                 filter(ReplaceTokens, tokens: tok([
                     ubu      : cfg.codename,
                     xxx      : version,
@@ -159,13 +158,6 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
             copy {
                 from "build/DEB-template/debian/copyright"
                 into "${ubuStage}/debian"
-            }
-
-            if (!cfg.optLibs?.contains("python3-sounddevice")) {
-                copy {
-                    from "build/DEB-template/debian/postinst"
-                    into "${ubuStage}/debian"
-                }
             }
 
             def tarFile = file("${debOut}/${buildName}.tar")

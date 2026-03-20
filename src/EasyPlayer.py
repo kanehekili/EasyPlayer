@@ -58,12 +58,6 @@ try:
 except ImportError:
     HAS_SPECTRUM = False
 
-try:
-    import sounddevice as sd
-    HAS_SD = True
-except ImportError:
-    HAS_SD = False
-
 
 class ParecStream:
     def __init__(self, device, samplerate, blocksize, callback):
@@ -343,25 +337,15 @@ class Player(QOpenGLWidget):
             return
         try:
             device = self._findMonitorDevice()
-            if device and isinstance(device, str) and device.endswith('.monitor'):
-                self._specStream = ParecStream(
-                    device,
-                    self.SPECTRUM_SAMPLE_RATE,
-                    self.SPECTRUM_BLOCK_SIZE,
-                    self._audioCallback
-                )
-            elif HAS_SD:
-                self._specStream = sd.InputStream(
-                    device=device,
-                    samplerate=self.SPECTRUM_SAMPLE_RATE,
-                    channels=1,
-                    blocksize=self.SPECTRUM_BLOCK_SIZE,
-                    dtype='float32',
-                    callback=self._audioCallback
-                )
-            else:
-                Log.warning("Spectrum capture failed - sounddevice not available")
+            if not device:
+                Log.warning("Spectrum capture failed - no monitor device found")
                 return
+            self._specStream = ParecStream(
+                device,
+                self.SPECTRUM_SAMPLE_RATE,
+                self.SPECTRUM_BLOCK_SIZE,
+                self._audioCallback
+            )
             self._specStream.start()
             self._specOverlay.show()
         except Exception:
@@ -378,44 +362,11 @@ class Player(QOpenGLWidget):
         self._specOverlay.hide()
         self._specOverlay.clearMags()
 
-    def _findMonitorDevicex(self):
-        Log.info("Available SD devices: %s", sd.query_devices())
-        try:
-            import subprocess
-            result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                monitor = result.stdout.strip() + '.monitor'
-                devices = sd.query_devices()
-                for i, dev in enumerate(devices):
-                    if monitor in dev['name'] and dev['max_input_channels'] > 0:
-                        Log.info("Spectrum: using monitor device [%d] %s", i, dev['name'])
-                        return i
-        except Exception:
-            pass
-        Log.info("Spectrum: no monitor device found")
-        return None
-    
     def _findMonitorDevice(self):
-        #Log.info("Available SD devices: %s", sd.query_devices())
         try:
-            import subprocess
             result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 monitor = result.stdout.strip() + '.monitor'
-                if HAS_SD:
-                    devices = sd.query_devices()
-                    # PipeWire: monitor source appears directly in device list
-                    for i, dev in enumerate(devices):
-                        if monitor in dev['name'] and dev['max_input_channels'] > 0:
-                            Log.info("Spectrum: using monitor device [%d] %s", i, dev['name'])
-                            return i
-                    # PulseAudio: use 'pulse' ALSA device with PULSE_SOURCE
-                    for i, dev in enumerate(devices):
-                        if dev['name'].strip() == 'pulse' and dev['max_input_channels'] > 0:
-                            os.environ['PULSE_SOURCE'] = monitor
-                            Log.info("Spectrum: using pulse with monitor source %s", monitor)
-                            return 'pulse'
-                # No sounddevice or no matching device: fall back to parec
                 Log.info("Spectrum: using parec with monitor source %s", monitor)
                 return monitor
         except Exception:
@@ -432,14 +383,15 @@ class Player(QOpenGLWidget):
         #Log.debug("Spectrum peak: %.6f  fft_max: %.1f", float(np.max(np.abs(data))), float(np.max(np.abs(np.fft.rfft(data)))))       
         
         freqs = np.fft.rfftfreq(len(data), 1.0 / self.SPECTRUM_SAMPLE_RATE)
-        DB_FLOOR = -80.0
-        reference = self.SPECTRUM_BLOCK_SIZE / 4.0
+        DB_FLOOR = -100.0 #bigger negative == higher gain
+        reference = self.SPECTRUM_BLOCK_SIZE / 15.0 #rasing all bars with higher number
         new_mags = []
         for i in range(SpectrumOverlay.BANDS):
             mask = (freqs >= SpectrumOverlay.BAND_EDGES[i]) & (freqs < SpectrumOverlay.BAND_EDGES[i + 1])
             if mask.any():
                 val = float(np.max(fft_data[mask])) / reference
                 db = 20.0 * np.log10(val) if val > 0 else DB_FLOOR
+                #increase the last 4 frequencies
                 if i >= SpectrumOverlay.BANDS - 4:
                     db += 6.0
                     
@@ -448,11 +400,13 @@ class Player(QOpenGLWidget):
                 new_mags.append(0.0)
         overlay = self._specOverlay
         with overlay._lock:
+            riseFactor = 0.5 #how fast bars jump up
+            decayFactor = 0.9 #how fast bars fall
             for i in range(SpectrumOverlay.BANDS):
                 if new_mags[i] > overlay._mags[i]:
-                    overlay._mags[i] = overlay._mags[i] + 0.5 * (new_mags[i] - overlay._mags[i]) #0.3
+                    overlay._mags[i] = overlay._mags[i] + riseFactor * (new_mags[i] - overlay._mags[i]) #0.3
                 else:
-                    overlay._mags[i] = overlay._mags[i] * 0.95  #0.85
+                    overlay._mags[i] = overlay._mags[i] * decayFactor  #0.85
         overlay.update()
 
                   
@@ -976,7 +930,7 @@ class MainFrame(QtWidgets.QMainWindow):
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playPause")))
             if self.player.isAudioOnly:
                 if not HAS_SPECTRUM:
-                    self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy and sounddevice")
+                    self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy")
                 elif self.settings.hasEQ():
                     self.player.startCapture()
         else:

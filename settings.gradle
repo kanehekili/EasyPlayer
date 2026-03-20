@@ -13,7 +13,7 @@ gradle.ext.distros = [
     arch: [
         type:    "arch",
         libs:    "python-pyqt6, mpv, ffmpeg",
-        optLibs: "python-numpy: spectrum analyzer, python-sounddevice: spectrum analyzer, alsa-plugins: spectrum analyzer on PipeWire systems",
+        optLibs: "python-numpy: spectrum analyzer",
     ],
 
     ubu0: [
@@ -33,7 +33,7 @@ gradle.ext.distros = [
     ubu2: [
         type:     "ubuntu",
         codename: "resolute",
-        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils,python3-numpy, python3-sounddevice",
+        libs:     "python3, ffmpeg, python3-pyqt6, libmpv2, pulseaudio-utils, python3-numpy",
         optLibs:  "",
     ],
 
