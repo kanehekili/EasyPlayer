@@ -1166,6 +1166,7 @@ class SettingsModel(QtCore.QObject):
         self.mainFrame = mainframe
         self.showSubs = ep_config.getBoolean("subtitles", False)  # id if subtitle should be presented. mpv only
         self.spectrumMode = ep_config.get("spectrumMode", "heat")
+        self.softwareRender = ep_config.getBoolean("softwareRender", False)
         self.isoCodes = []
     
     def sync(self):
@@ -1180,6 +1181,7 @@ class SettingsModel(QtCore.QObject):
             ep_config.set("subtitles", "False")
         
         ep_config.set("spectrumMode", self.spectrumMode)
+        ep_config.set("softwareRender", str(self.softwareRender))
         # SET the icoset
         ep_config.set("icoSet", self.iconSet)
         
@@ -1215,6 +1217,13 @@ class SettingsModel(QtCore.QObject):
         self.__update()
         self.changeSpectrum.emit(mode)
 
+    def hasSoftwareRender(self):
+        return self.softwareRender
+
+    def setSoftwareRender(self, aBool):
+        self.softwareRender = aBool
+        self.__update()
+
 
 class SettingsDialog(QtWidgets.QDialog):
 
@@ -1241,9 +1250,7 @@ class SettingsDialog(QtWidgets.QDialog):
         frame1 = QtWidgets.QFrame()
         frame1.setFrameStyle(QtWidgets.QFrame.Shape.Box | QtWidgets.QFrame.Shadow.Sunken)
         frame1.setLineWidth(1)
-        frame2 = QtWidgets.QFrame()
-        frame2.setFrameStyle(QtWidgets.QFrame.Shape.Box | QtWidgets.QFrame.Shadow.Sunken)
-        frame2.setLineWidth(1)
+        frame2 = QtWidgets.QGroupBox("Requires restart")
        
         self.showEQ = QtWidgets.QCheckBox("Show EQ - Audio only")
         self.showEQ.setToolTip("Display an EQ on music")
@@ -1262,7 +1269,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.showSub.setChecked(self.model.hasSubtitles())
         self.showSub.stateChanged.connect(self._onSubChanged)
         
-        frame2Header = QtWidgets.QLabel("Icon theme. Restart application after change")
+        self.softwareRender = QtWidgets.QCheckBox("Software rendering (slow or virtual hardware)")
+        self.softwareRender.setToolTip("Enables compatibility mode for older or virtual hardware — restart to take effect")
+        self.softwareRender.setChecked(self.model.hasSoftwareRender())
+        self.softwareRender.stateChanged.connect(self._onSoftwareRenderChanged)
 
         # lbl = QtWidgets.QLabel("< Icon theme")
         self.setIconTheme = QtWidgets.QComboBox()
@@ -1279,9 +1289,13 @@ class SettingsDialog(QtWidgets.QDialog):
         clickBox.addWidget(self.spectrumMode)
         clickBox.addWidget(self.showSub)
 
+        iconThemeBox = QtWidgets.QHBoxLayout()
+        iconThemeBox.addWidget(QtWidgets.QLabel("Icon theme:"))
+        iconThemeBox.addWidget(self.setIconTheme)
+
         subBox = QtWidgets.QVBoxLayout(frame2)
-        subBox.addWidget(frame2Header)
-        subBox.addWidget(self.setIconTheme)
+        subBox.addWidget(self.softwareRender)
+        subBox.addLayout(iconThemeBox)
         
         outBox.addLayout(versionBox)
         outBox.addWidget(frame1)
@@ -1293,9 +1307,9 @@ class SettingsDialog(QtWidgets.QDialog):
     def _onSubChanged(self, showsub):
         self.model.setSubtitle(showsub)
 
-    def _onGLChanged(self, useGL):
-        self.model.setGL(QtCore.Qt.CheckState.Checked.value == useGL)
-        
+    def _onSoftwareRenderChanged(self, val):
+        self.model.setSoftwareRender(QtCore.Qt.CheckState.Checked.value == val)
+
     def _onEQChanged(self, aBool):
         self.model.setEQ(QtCore.Qt.CheckState.Checked.value == aBool)
 
@@ -1450,7 +1464,8 @@ def main():
         ep_config.read();    
         ICOMAP = IconMapper(ep_config.get("icoSet", "default"))  
         argv = sys.argv
-        res = parseOptions(argv)    
+        res = parseOptions(argv)
+        res["virtual"] = res["virtual"] or ep_config.getBoolean("softwareRender", False)
         FFMPEGTools.setupRotatingLogger(AppName, res["logConsole"], "EasyPlayer")
         de = OSTools().currentDesktop()
         if de not in OSTools.QT_DESKTOPS:        

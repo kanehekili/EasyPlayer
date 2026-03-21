@@ -36,13 +36,13 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 * Language can be selected
 * Supports an EQ-display for audio files - Some distros need to install python3-sounddevice via pip. (Not mandatory) 
 * Colors of the EQ display can be changed live via the settings dialog. 
+* Settings allows you to switch to software mode (old hardware & virtual environments)
 
 
 ### Support for Qemu:
--v will use a virtual GL driver for rendering. (easyplayer -v)
+* -v will use a virtual GL driver for rendering. (easyplayer -v)
+* Can be set via the "Settings dialog - Software mode" as well. 
 
-
-##Install
 
 #### Install via ppa on Linux Mint or Ubuntu (Mint 22.2, Ubuntu 22.04 and newer versions)
 ```
@@ -68,7 +68,7 @@ Remove with:
 Select video and open it with "Open with ->EasyPlayer", oder via terminal "easyplayer"
 
 
-#### Install dependencies manually on Linux Mint or Ubuntu (tested from 20.04 to 22.04)
+#### Install dependencies manually on Linux Mint or Ubuntu (tested from noble to resolute)
 ```
 sudo apt –no-install-recommends install python3-pyqt6 ffmpeg python3-pil libmpv2
 ```
@@ -97,6 +97,9 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
 ### Changes 
+21.03.2026
+* Support for virtual environments or slow hardware via SettingsDialog
+
 20.03.2026
 * introducing "parec" for Spectrum EQ (Ubuntu)
  
