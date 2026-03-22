@@ -612,6 +612,7 @@ class Player(QOpenGLWidget):
             Log.info("Runs in VIRTGL mode")
             kwArgs['gpu-dumb-mode'] = 'yes'
             kwArgs['vd-lavc-dr'] = 'no'
+            kwArgs['hwdec']= "none"
         return kwArgs
         
     def _passLog(self, __loglevel, component, message):
