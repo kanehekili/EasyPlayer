@@ -1,7 +1,7 @@
 # EasyPlayer
-Version 1.2.2
+Version 1.3.0
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.2.2/easyplayer1.2.2.tar)
+![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.3.0/easyplayer1.3.0.tar)
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
@@ -32,6 +32,7 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 * Easyplayer supports wayland and orientation recognition (which mplayer does not). 
 * Has been tested with interlaced video and 4K 
 * Subtitles can be shown (settings)
+* Playlist support
 * Flat and non flat icon set
 * Language can be selected
 * Supports an EQ-display for audio files - Some distros need to install python3-sounddevice via pip. (Not mandatory) 
@@ -97,6 +98,9 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
 ### Changes 
+30.03.2026
+* Playlist support
+
 21.03.2026
 * Support for virtual environments or slow hardware via SettingsDialog
 
