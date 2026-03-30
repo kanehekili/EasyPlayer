@@ -735,6 +735,10 @@ class FFStreamProbe():
         if len(self.video) == 0:
             return None
         return self.video[0]
+
+    def hasEmbeddedCover(self):
+        """Return True if any stream is an attached picture (embedded cover art)."""
+        return any(s._picAttached() for s in self.streams)
     
     def getAudioStream(self):
         for stream in self.audio:
