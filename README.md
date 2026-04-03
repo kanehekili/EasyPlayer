@@ -100,6 +100,7 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 ### Changes 
 30.03.2026
 * Playlist support
+* Fix scaled Xwayland desktops
 
 21.03.2026
 * Support for virtual environments or slow hardware via SettingsDialog

@@ -323,17 +323,14 @@ class Player(QOpenGLWidget):
         self.mpv.observe_property("media-title", self._onMediaTitle)
 
     def resizeGL(self, w, h):
-        # Cache it here - resizeGL is called after the widget is properly initialized
-        sc = self.devicePixelRatio()
-        pw = int(w * sc)
-        ph = int(h * sc)
-        self._opengl_fbo = {'w': pw, 'h': ph, 'fbo': self.defaultFramebufferObject()}
+        self._opengl_fbo = True
         self._specOverlay.setGeometry(0, 0, w, h)
-        
 
     def paintGL(self):
         if self.ctx and self._opengl_fbo:
-            fbo = {**self._opengl_fbo, 'fbo': self.defaultFramebufferObject()}
+            sc = self.devicePixelRatio()
+            fbo = {'w': int(self.width() * sc), 'h': int(self.height() * sc),
+                   'fbo': self.defaultFramebufferObject()}
             self.ctx.render(flip_y=True, opengl_fbo=fbo)
 
     def paintEvent(self, event):
