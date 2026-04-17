@@ -298,12 +298,20 @@ class Player(QOpenGLWidget):
         self.sliderThread.seekTo(seconds)
 
     def seek(self, seconds):
-        self.mpv.seek(seconds, "absolute")
-        self._waitSeekDone()
-        
+        try:
+            self.mpv.seek(seconds, "absolute")
+            self._waitSeekDone()
+        except SystemError:
+            Log.info("Seek failed - stream not seekable")
+            self._muteWhileSeeking(False)
+
     def seekRelative(self, seconds):
-        self.mpv.seek(seconds, "relative")
-        self._waitSeekDone()
+        try:
+            self.mpv.seek(seconds, "relative")
+            self._waitSeekDone()
+        except SystemError:
+            Log.info("Seek failed - stream not seekable")
+            self._muteWhileSeeking(False)
         
     def _waitSeekDone(self):
         self.mpv.observe_property("seeking", self._onSeek)
@@ -321,6 +329,7 @@ class Player(QOpenGLWidget):
         self.mpv.observe_property("eof-reached", self._onPlayEnd)
         self.mpv.observe_property("time-pos", self._onTimePos)  # messes up timing!
         self.mpv.observe_property("media-title", self._onMediaTitle)
+        self.mpv.observe_property("duration", self._onDuration)
 
     def resizeGL(self, w, h):
         self._opengl_fbo = True
@@ -1169,6 +1178,8 @@ class MainFrame(QtWidgets.QMainWindow):
 
     def _makeLayout(self):
         mainBox = QtWidgets.QVBoxLayout()
+        mainBox.setContentsMargins(0, 0, 0, 0)
+        mainBox.setSpacing(0)
         contentRow = QtWidgets.QHBoxLayout()
         contentRow.setSpacing(0)
         contentRow.addWidget(self.player, stretch=1)
@@ -1186,7 +1197,7 @@ class MainFrame(QtWidgets.QMainWindow):
     
     def loadFile(self):
         initalPath = self.player.getSourceDir()
-        fileFilter = "Media & Playlists (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.m2t *.mp3 *.flac *.ogg *.wav *.aac *.m3u *.m3u8 *.pls *.xspf);;Playlists (*.m3u *.m3u8 *.pls *.xspf);;All files (*)"
+        fileFilter = "Media & Playlists (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.m2t *.mp3 *.flac *.ogg *.wav *.aac *.m3u *.m3u8 *.pls *.xspf);;Pictures (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff *.tif);;Playlists (*.m3u *.m3u8 *.pls *.xspf);;All files (*)"
         result = QtWidgets.QFileDialog.getOpenFileName(parent=self, directory=initalPath, caption="Load Media", filter=fileFilter)
         if result[0]:
             fn = self.__encodeQString(result)
@@ -1271,7 +1282,8 @@ class MainFrame(QtWidgets.QMainWindow):
     
     @pyqtSlot(str)
     def _onPlayerError(self, errorMsg):
-        Log.error("MPV error: %s",errorMsg)
+        Log.error("MPV error: %s", errorMsg)
+        self._initIcon()
         self.getErrorDialog("Invalid file", "Not a valid codec found", errorMsg).show()
     
     def __enableActionsOnVideoPlay(self, enable):
@@ -1358,14 +1370,15 @@ class MainFrame(QtWidgets.QMainWindow):
                 h = "0"
                 ar = "no Video"
                 fr = 0.0
+                isInterlaced = False
             else:
                 codec = videoData.getCodec()
                 w = videoData.getWidth()
                 h = videoData.getHeight()
                 ar = videoData.getAspectRatio()
-                fr = videoData.frameRateAvg()                
+                fr = videoData.frameRateAvg()  
+                isInterlaced = videoData.isInterlaced()            
                 
-            entries = []
             s = int(self.player.duration)
             ts = '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
 
@@ -1414,32 +1427,17 @@ class MainFrame(QtWidgets.QMainWindow):
                 <td style="border: 1px solid darkgray; padding: 8px 15px;"><b>Audio codec:</b></td>
                 <td style="border: 1px solid darkgray; padding: 8px 15px;">%s</td>
             </tr>
-            </table>""" % (container.formatNames()[0], container.getBitRate(), container.getSizeKB() / 1024, streamData.isTransportStream(),videoData.isInterlaced(), codec, w, h, ar, fr, ts, acodec)
+            </table>""" % (container.formatNames()[0], container.getBitRate(), container.getSizeKB() / 1024, streamData.isTransportStream(),isInterlaced, codec, w, h, ar, fr, ts, acodec)
 
-            '''
-            entries.append("""<br><\br><table border=0 cellspacing="3",cellpadding="2">""")
-            #TODO -check the cvInfos (CvPlayer)
-           
-            #for key, value in cvInfo.items():
-            for key, value in VideoPlugin.info().items():
-                entries.append("<tr border=1><td><b>")
-                entries.append(key)
-                entries.append(":</b></td><td> ")
-                entries.append(value)
-                entries.append("</td></tr>")
-            entries.append("</table>");
-            '''
-            text2 = ''.join(entries)
-                                        
         except:
             Log.exception("Invalid codec format")
-            text2 = "<br> Please select a file first"
-        self.__getInfoDialog(textDS + text2).show()
+            textDS = "<br> File is broken. Please select a valid file" #No idea how this can happen. 
+        self.__getInfoDialog(textDS).show()
 
     def __getInfoDialog(self, text):
         dlg = QtWidgets.QDialog(self)
         dlg.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        dlg.setWindowTitle("Media Infos")
+        dlg.setWindowTitle("Media Info")
         layout = QtWidgets.QVBoxLayout(dlg)
         label = QtWidgets.QLabel(text)
         label.sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)

@@ -1,5 +1,5 @@
 # EasyPlayer
-Version 1.3.0
+Version 1.3.1
 
 ![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.3.0/easyplayer1.3.0.tar)
 
@@ -33,6 +33,7 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 * Has been tested with interlaced video and 4K 
 * Subtitles can be shown (settings)
 * Playlist support
+* Picture/image viewer (png, jpg, bmp, gif, webp, tiff)
 * Flat and non flat icon set
 * Language can be selected
 * Supports an EQ-display for audio files - Some distros need to install python3-sounddevice via pip. (Not mandatory) 
@@ -98,6 +99,11 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
 ### Changes 
+18.04.2026
+* Remove outer border for fullscreen
+* Picture/image support added to file dialog and MIME types
+* Fix playlist errors
+
 30.03.2026
 * Playlist support
 * Fix scaled Xwayland desktops
