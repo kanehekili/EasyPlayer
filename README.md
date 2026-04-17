@@ -1,7 +1,7 @@
 # EasyPlayer
 Version 1.3.1
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.3.0/easyplayer1.3.0.tar)
+![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.3.1/easyplayer1.3.1.tar)
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
