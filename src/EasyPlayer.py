@@ -55,6 +55,11 @@ MEDIA_EXTENSIONS = {
     '.mp3', '.flac', '.ogg', '.wav', '.aac', '.m4a', '.opus', '.wma',
     '.m4v', '.mpg', '.mpeg', '.vob', '.3gp', '.rm', '.rmvb',
 }
+PICTURE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tiff', '.tif'}
+def _formatExts(exts):
+    parts = sorted(exts)
+    return ' '.join('*' + e for e in parts) + ' ' + ' '.join('*' + e.upper() for e in parts)
+
 
 try:
     import numpy as np
@@ -277,9 +282,9 @@ class Player(QOpenGLWidget):
             return True
 
     def _tweak(self, streamData):
-        if streamData.isVC1Codec(): 
+        if streamData.isVC1Codec():
             self.mpv.hwdec_codecs = "vc1"
-            Log.info("Optimized for VC1")  
+            Log.info("Optimized for VC1")
         else:
             self.mpv.hwdec_codecs = "all"
         interlaced = streamData.interlaced
@@ -287,7 +292,7 @@ class Player(QOpenGLWidget):
             Log.info("Transport stream. Setting seek offset to high and interlacing: %d"%(interlaced))
             self._demuxOffset=1.5#Solution for mpegts seek
             if interlaced:
-                self.mpv.deinterlace="yes"            
+                self.mpv.deinterlace="yes"
            
             
 
@@ -668,7 +673,8 @@ class Player(QOpenGLWidget):
             "demuxer_seekable_cache" : 'yes',
             "volume" : 100,
             "audio-display":"embedded-first",
-            "opengl_early_flush":'yes'
+            "opengl_early_flush":'yes',
+            "vf": "lavfi=[crop=iw-mod(iw\\,2):ih-mod(ih\\,2):0:0]"
             }
         if isVirtual:
             Log.info("Runs in VIRTGL mode")
@@ -734,6 +740,7 @@ class PlaylistPanel(QtWidgets.QFrame):
         super().__init__(parent)
         self._paths = []
         self._sourcePath = sourcePath
+        self._lastAddDir = None
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         self.setFixedWidth(230)
         self._initUI()
@@ -854,6 +861,7 @@ class PlaylistPanel(QtWidgets.QFrame):
     def _onNew(self):
         self._paths = []
         self._sourcePath = None
+        self._lastAddDir = None
         self.nameEdit.setText("")
         self.trackList.clear()
         self.requestNew.emit()
@@ -867,10 +875,10 @@ class PlaylistPanel(QtWidgets.QFrame):
             startDir = os.path.expanduser("~")
         result = QtWidgets.QFileDialog.getOpenFileNames(
             self, "Add files", startDir,
-            "Media (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.m2t "
-            "*.mp3 *.flac *.ogg *.wav *.aac);;All files (*)"
+            f"Media ({_formatExts(MEDIA_EXTENSIONS)});;All files (*)"
         )
         if result[0]:
+            self._lastAddDir = os.path.dirname(result[0][0])
             self.addPaths(result[0])
 
     def _onDeleteSelected(self):
@@ -885,7 +893,9 @@ class PlaylistPanel(QtWidgets.QFrame):
 
     def _onSave(self):
         name = self.nameEdit.text().strip() or "playlist"
-        if self._sourcePath:
+        if self._lastAddDir:
+            base = self._lastAddDir
+        elif self._sourcePath:
             base = os.path.dirname(self._sourcePath)
         elif self._paths:
             base = os.path.dirname(self._paths[-1])
@@ -1064,7 +1074,6 @@ class MainFrame(QtWidgets.QMainWindow):
             self.player.setCursor(QtCore.Qt.CursorShape.BlankCursor)
             pos = QtGui.QCursor.pos()
             QtCore.QTimer.singleShot(50, lambda: (QtGui.QCursor.setPos(self.player.mapToGlobal(QtCore.QPoint(pos.x() + 1, pos.y())))))
-            self.player.grabKeyboard()
 
     def _setNormalScreen(self):
         if self._fullscreen:
@@ -1074,7 +1083,6 @@ class MainFrame(QtWidgets.QMainWindow):
             self._fullscreen = False
             self.showNormal()
             self.player.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
-            self.player.releaseKeyboard()
             self.playlistPanelAction.blockSignals(True)
             self.playlistPanelAction.setChecked(self._panelWasVisible)
             self.playlistPanelAction.blockSignals(False)
@@ -1197,7 +1205,12 @@ class MainFrame(QtWidgets.QMainWindow):
     
     def loadFile(self):
         initalPath = self.player.getSourceDir()
-        fileFilter = "Media & Playlists (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.m2t *.mp3 *.flac *.ogg *.wav *.aac *.m3u *.m3u8 *.pls *.xspf);;Pictures (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.tiff *.tif);;Playlists (*.m3u *.m3u8 *.pls *.xspf);;All files (*)"
+        fileFilter = (
+            f"Media & Playlists ({_formatExts(MEDIA_EXTENSIONS | PLAYLIST_EXTENSIONS)})"
+            f";;Pictures ({_formatExts(PICTURE_EXTENSIONS)})"
+            f";;Playlists ({_formatExts(PLAYLIST_EXTENSIONS)})"
+            f";;All files (*)"
+        )
         result = QtWidgets.QFileDialog.getOpenFileName(parent=self, directory=initalPath, caption="Load Media", filter=fileFilter)
         if result[0]:
             fn = self.__encodeQString(result)
@@ -1561,7 +1574,6 @@ class SettingsModel(QtCore.QObject):
     def setSoftwareRender(self, aBool):
         self.softwareRender = aBool
         self.__update()
-
 
 class SettingsDialog(QtWidgets.QDialog):
 
