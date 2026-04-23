@@ -29,9 +29,15 @@ from PyQt6.QtCore import QByteArray, pyqtSignal, pyqtSlot, QThread
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
-import sys, json, FFMPEGTools, getopt, traceback, locale, os, re, subprocess
-from threading import Condition, Lock, Thread
+import sys, json, FFMPEGTools, getopt, traceback, locale, re
+from threading import Condition
 from QtTools import SliderThread, installSigIntHandler
+from Slideshow import ImageOverlay, SlideshowController, PICTURE_EXTENSIONS
+from AudioPlay import SpectrumController, SpectrumOverlay, HAS_SPECTRUM
+import Playlist
+from Playlist import PlaylistPanel, PlaylistManager, PLAYLIST_EXTENSIONS, MEDIA_EXTENSIONS
+
+
 
 global Log
 global AppName
@@ -49,179 +55,12 @@ def get_process_address(_, name):
     return address
 
 
-PLAYLIST_EXTENSIONS = {'.m3u', '.m3u8', '.pls', '.xspf'}
-MEDIA_EXTENSIONS = {
-    '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.ts', '.m2t',
-    '.mp3', '.flac', '.ogg', '.wav', '.aac', '.m4a', '.opus', '.wma',
-    '.m4v', '.mpg', '.mpeg', '.vob', '.3gp', '.rm', '.rmvb',
-}
-PICTURE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tiff', '.tif'}
-def _formatExts(exts):
-    parts = sorted(exts)
-    return ' '.join('*' + e for e in parts) + ' ' + ' '.join('*' + e.upper() for e in parts)
+SLIDE_DURATION = 10
 
-
-try:
-    import numpy as np
-    HAS_SPECTRUM = True
-except ImportError:
-    HAS_SPECTRUM = False
-
-
-class ParecStream:
-    def __init__(self, device, samplerate, blocksize, callback):
-        self._proc = subprocess.Popen(
-            ['parec', f'--device={device}', '--format=float32le',
-             '--channels=1', f'--rate={samplerate}', '--latency-msec=20'],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-        )
-        self._blocksize = blocksize
-        self._callback = callback
-        self._stopped = False
-        self._thread = Thread(target=self._loop, daemon=True)
-
-    def start(self):
-        self._thread.start()
-
-    def stop(self):
-        self._stopped = True
-        self._proc.terminate()
-
-    def close(self):
-        try:
-            self._proc.wait(timeout=1)
-        except Exception:
-            pass
-        self._thread.join(timeout=1)
-
-    def _loop(self):
-        bytes_per_block = self._blocksize * 4
-        while not self._stopped:
-            data = self._proc.stdout.read(bytes_per_block)
-            if not data or len(data) < bytes_per_block:
-                break
-            if not self._stopped:
-                arr = np.frombuffer(data, dtype='float32').reshape(-1, 1)
-                self._callback(arr, self._blocksize, None, None)
-
-
-def _parsePlaylist(path):
-    """Parse playlist file and return list of absolute paths/URLs."""
-    base = os.path.dirname(os.path.abspath(path))
-    _, ext = os.path.splitext(path)
-    ext = ext.lower()
-    entries = []
-
-    def resolve(p):
-        p = p.strip()
-        if not p:
-            return None
-        if '://' in p:
-            return p
-        if not os.path.isabs(p):
-            p = os.path.join(base, p)
-        return p
-
-    try:
-        if ext in ('.m3u', '.m3u8'):
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        r = resolve(line)
-                        if r:
-                            entries.append(r)
-        elif ext == '.pls':
-            with open(path, 'r', encoding='utf-8', errors='replace') as f:
-                for line in f:
-                    m = re.match(r'File\d+=(.+)', line.strip(), re.IGNORECASE)
-                    if m:
-                        r = resolve(m.group(1))
-                        if r:
-                            entries.append(r)
-        elif ext == '.xspf':
-            import xml.etree.ElementTree as ET
-            ns = {'x': 'http://xspf.org/ns/0/'}
-            for loc in ET.parse(path).findall('.//x:location', ns):
-                if loc.text:
-                    r = resolve(loc.text)
-                    if r:
-                        entries.append(r)
-    except Exception:
-        Log.exception("Parsing playlist %s", path)
-    return entries
-
-
-
-class SpectrumOverlay(QtWidgets.QWidget):
-    BAND_EDGES = [50, 100, 200, 400, 800, 1600, 3200, 6400, 12800, 14000,14500, 15000, 16000]
-    BANDS = len(BAND_EDGES)-1
-    BAR_COLORS = ["heat", "rainbow", "blue", "green", "magenta", "red"]
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._mags = [0.0] * self.BANDS
-        self._lock = Lock()
-        self.mode = "heat"
-
-    def setMags(self, mags):
-        with self._lock:
-            self._mags = mags[:]
-        self.update()
-
-    def clearMags(self):
-        with self._lock:
-            self._mags = [0.0] * self.BANDS
-        self.update()
-
-    def paintEvent(self, __event):
-        with self._lock:
-            mags = self._mags[:]
-        mode = self.mode
-        painter = QtGui.QPainter(self)
-        painter.fillRect(self.rect(), QtGui.QColor(15, 15, 15))
-        w, h = self.width(), self.height()
-        bar_w = w // self.BANDS
-        gap = max(2, bar_w // 8)
-        for i, level in enumerate(mags):
-            bar_h = max(2, int(level * 0.9 * (h - 4)))
-            x = i * bar_w + gap
-            y = h - bar_h - 2
-            if mode=="red":
-                r = min(255, int(level * 2 * 255))
-                g = min(255, int((1.0 - level) * 2 * 255))
-                b= 0
-                color= QtGui.QColor(r, g, b)
-            elif mode== "magenta":
-                r = min(255, int(level * 2 * 255))
-                g = min(255, int((1.0 - level) * 2 * 255))
-                b = min(255, max(0, int((level * 2 - 1) * 255)))
-                color= QtGui.QColor(r, g, b)
-            elif mode=="blue":
-                r = 0
-                g = min(255, int((1.0 - level) * 2 * 255))
-                b = min(255, int(level * 2 * 255))
-                color= QtGui.QColor(r, g, b)
-            elif mode == "rainbow":
-                hue = int(i / SpectrumOverlay.BANDS * 300)  # red→orange→yellow→green→blue→violet
-                color = QtGui.QColor.fromHsv(hue, 220, max(30, int(level * 255)))
-            elif mode == "heat":
-                hue = int((1.0 - level) * 240)  # 240=blue → 0=red
-                color = QtGui.QColor.fromHsv(hue, 255, max(80, int(level * 255)))
-            else: #mode green
-                r = int((1.0 - level) * 255)
-                g = int((1.0 - level * 0.6) * 255)
-                b = 0
-                color= QtGui.QColor(r, g, b)
-            painter.fillRect(x, y, bar_w - gap * 2, bar_h, color)
-        painter.end()
 
 
 class Player(QOpenGLWidget):
     ERR_IDS = ["No video or audio streams selected.", "Failed to recognize file format."]
-    SPECTRUM_SAMPLE_RATE = 44100
-    SPECTRUM_BLOCK_SIZE = 4096
     triggerUpdate = pyqtSignal(float)
     triggerInitialized = pyqtSignal()
     fileLoaded = pyqtSignal()
@@ -250,9 +89,10 @@ class Player(QOpenGLWidget):
         self.isAudioOnly = False
         self.durString = "00:00:00"
         self._opengl_fbo = None
-        self._specStream = None
-        self._specOverlay = SpectrumOverlay(self)
-        self._specOverlay.hide()
+        self.spectrumCtrl = SpectrumController(self)
+        self._imageOverlay = ImageOverlay(self)
+        self._imageOverlay.hide()
+        self.playlistManager = PlaylistManager()
         
     def initializeGL(self) -> None:
         self.ctx = MpvRenderContext(
@@ -338,7 +178,8 @@ class Player(QOpenGLWidget):
 
     def resizeGL(self, w, h):
         self._opengl_fbo = True
-        self._specOverlay.setGeometry(0, 0, w, h)
+        self.spectrumCtrl.setGeometry(0, 0, w, h)
+        self._imageOverlay.setGeometry(0, 0, w, h)
 
     def paintGL(self):
         if self.ctx and self._opengl_fbo:
@@ -350,83 +191,15 @@ class Player(QOpenGLWidget):
     def paintEvent(self, event):
         super().paintEvent(event)
 
-    def startCapture(self):
-        if not HAS_SPECTRUM or self._specStream is not None:
-            return
-        try:
-            device = self._findMonitorDevice()
-            if not device:
-                Log.warning("Spectrum capture failed - no monitor device found")
-                return
-            self._specStream = ParecStream(
-                device,
-                self.SPECTRUM_SAMPLE_RATE,
-                self.SPECTRUM_BLOCK_SIZE,
-                self._audioCallback
-            )
-            self._specStream.start()
-            self._specOverlay.show()
-        except Exception:
-            Log.warning("Spectrum capture failed - no valid device found")
+    def showImage(self, path):
+        self._imageOverlay.setImage(path)
+        self._imageOverlay.show()
+        self._imageOverlay.raise_()
 
-    def stopCapture(self):
-        if self._specStream:
-            try:
-                self._specStream.stop()
-                self._specStream.close()
-            except Exception:
-                pass
-            self._specStream = None
-        self._specOverlay.hide()
-        self._specOverlay.clearMags()
+    def hideImage(self):
+        self._imageOverlay.clearImage()
+        self._imageOverlay.hide()
 
-    def _findMonitorDevice(self):
-        try:
-            result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
-                monitor = result.stdout.strip() + '.monitor'
-                Log.info("Spectrum: using parec with monitor source %s", monitor)
-                return monitor
-        except Exception:
-            pass
-        Log.info("Spectrum: no monitor device found")
-        return None
-    
-
-    def _audioCallback(self, indata, __frames, __time, __status):
-        data = indata[:, 0]
-        windowed = data * np.hanning(len(data))
-        fft_data = np.abs(np.fft.rfft(windowed))
-        
-        #Log.debug("Spectrum peak: %.6f  fft_max: %.1f", float(np.max(np.abs(data))), float(np.max(np.abs(np.fft.rfft(data)))))       
-        
-        freqs = np.fft.rfftfreq(len(data), 1.0 / self.SPECTRUM_SAMPLE_RATE)
-        DB_FLOOR = -100.0 #bigger negative == higher gain
-        reference = self.SPECTRUM_BLOCK_SIZE / 15.0 #rasing all bars with higher number
-        new_mags = []
-        for i in range(SpectrumOverlay.BANDS):
-            mask = (freqs >= SpectrumOverlay.BAND_EDGES[i]) & (freqs < SpectrumOverlay.BAND_EDGES[i + 1])
-            if mask.any():
-                val = float(np.max(fft_data[mask])) / reference
-                db = 20.0 * np.log10(val) if val > 0 else DB_FLOOR
-                #increase the last 4 frequencies
-                if i >= SpectrumOverlay.BANDS - 4:
-                    db += 6.0
-                    
-                new_mags.append(max(0.0, min(1.0, (db - DB_FLOOR) / -DB_FLOOR)))
-            else:
-                new_mags.append(0.0)
-        with self._specOverlay._lock:
-            riseFactor = 0.5 #how fast bars jump up
-            decayFactor = 0.9 #how fast bars fall
-            for i in range(SpectrumOverlay.BANDS):
-                if new_mags[i] > self._specOverlay._mags[i]:
-                    self._specOverlay._mags[i] = self._specOverlay._mags[i] + riseFactor * (new_mags[i] - self._specOverlay._mags[i]) #0.3
-                else:
-                    self._specOverlay._mags[i] = self._specOverlay._mags[i] * decayFactor  #0.85
-        self._specOverlay.update()
-
-                  
     def do_update(self):
         self.update()
 
@@ -440,6 +213,9 @@ class Player(QOpenGLWidget):
             return
         if val == True:
             if self.isPlaylist:
+                path = self.mpv.path
+                if path and OSTools().getExtension(path).lower() in PICTURE_EXTENSIONS:
+                    return
                 try:
                     pos = self.mpv.playlist_pos
                     count = len(self.mpv.playlist)
@@ -456,7 +232,7 @@ class Player(QOpenGLWidget):
     def _onMediaTitle(self, _name, val):
         if self.closePending:
             return
-        if val and self.isPlaylist:
+        if val:
             self.playlistTrackChanged.emit(val)
 
     def nextTrack(self):
@@ -545,7 +321,7 @@ class Player(QOpenGLWidget):
     def startPlaying(self):
         if self.filePath is not None:
             if self.isPlaylist:
-                entries = _parsePlaylist(self.filePath)
+                entries = self.playlistManager.parse(self.filePath)
                 if not entries:
                     self.lastError = "Empty or unreadable playlist"
                     self.onError.emit(self.lastError)
@@ -638,7 +414,7 @@ class Player(QOpenGLWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """free mpv_context and terminate player before closing the widget"""
-        self.stopCapture()
+        self.spectrumCtrl.stopCapture()
         self.ctx.free()
         if self.sliderThread:
             self.sliderThread.stop()
@@ -674,7 +450,7 @@ class Player(QOpenGLWidget):
             "volume" : 100,
             "audio-display":"embedded-first",
             "opengl_early_flush":'yes',
-            "vf": "lavfi=[crop=iw-mod(iw\\,2):ih-mod(ih\\,2):0:0]"
+            "image_display_duration": "inf"
             }
         if isVirtual:
             Log.info("Runs in VIRTGL mode")
@@ -694,232 +470,6 @@ class Player(QOpenGLWidget):
 
 
 
-class PlaylistListWidget(QtWidgets.QListWidget):
-    """QListWidget: InternalMove reorder (Qt handles ghost + line indicator),
-    plus OS URL drops for adding files."""
-    filesDropped = pyqtSignal(list)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
-        self.setDragDropOverwriteMode(False)
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
-
-    def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
-
-    def dropEvent(self, event):
-        if event.mimeData().hasUrls():
-            paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
-            if paths:
-                self.filesDropped.emit(paths)
-            event.acceptProposedAction()
-        else:
-            super().dropEvent(event)
-
-
-class PlaylistPanel(QtWidgets.QFrame):
-    requestPlay      = pyqtSignal(int)  # double-click: play at this playlist index
-    requestPrev      = pyqtSignal()
-    requestNext      = pyqtSignal()
-    requestNew       = pyqtSignal()
-    requestPlayToggle = pyqtSignal()
-    playlistModified = pyqtSignal()     # contents changed (dirty flag)
-
-    def __init__(self, parent=None, sourcePath=None):
-        super().__init__(parent)
-        self._paths = []
-        self._sourcePath = sourcePath
-        self._lastAddDir = None
-        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        self.setFixedWidth(230)
-        self._initUI()
-
-    def _initUI(self):
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-
-        self.nameEdit = QtWidgets.QLineEdit()
-        self.nameEdit.setPlaceholderText("Playlist name")
-        layout.addWidget(self.nameEdit)
-
-        btnBar = QtWidgets.QHBoxLayout()
-        btnBar.setContentsMargins(0, 0, 0, 0)
-        btnBar.setSpacing(2)
-
-        def mkbtn(ico_key, tip):
-            b = QtWidgets.QToolButton()
-            b.setIcon(QtGui.QIcon(ICOMAP.ico(ico_key)))
-            b.setToolTip(tip)
-            return b
-
-        self.btnNew  = mkbtn("newList",  "New playlist")
-        self.btnPrev = mkbtn("prev",     "Previous track  (Ctrl+Left)")
-        self.btnNext = mkbtn("next",     "Next track  (Ctrl+Right)")
-        self.btnPlay = mkbtn("playStart", "Play / Pause  (Space)")
-        self.btnAdd  = mkbtn("addFile",  "Add files")
-        self.btnDel  = mkbtn("delItem",  "Remove selected")
-        self.btnSave = mkbtn("saveList", "Save playlist as .m3u")
-
-        for b in (self.btnNew, self.btnPrev, self.btnNext):
-            btnBar.addWidget(b)
-        btnBar.addStretch()
-        btnBar.addWidget(self.btnPlay)
-        btnBar.addStretch()
-        for b in (self.btnAdd, self.btnDel, self.btnSave):
-            btnBar.addWidget(b)
-        layout.addLayout(btnBar)
-
-        self.trackList = PlaylistListWidget(self)
-        layout.addWidget(self.trackList)
-
-        self.btnNew.clicked.connect(self._onNew)
-        self.btnPrev.clicked.connect(self.requestPrev)
-        self.btnNext.clicked.connect(self.requestNext)
-        self.btnPlay.clicked.connect(self.requestPlayToggle)
-        self.btnAdd.clicked.connect(self._onAddFiles)
-        self.btnDel.clicked.connect(self._onDeleteSelected)
-        self.btnSave.clicked.connect(self._onSave)
-        self.trackList.itemDoubleClicked.connect(self._onDoubleClick)
-        self.trackList.filesDropped.connect(self._onFilesDropped)
-        self.trackList.model().rowsMoved.connect(self._syncPathsFromList)
-
-    # ---- public API ----
-
-    def setTracks(self, paths, name="", sourcePath=None):
-        self._paths = list(paths)
-        if sourcePath is not None:
-            self._sourcePath = sourcePath
-        self.nameEdit.setText(name)
-        self._refreshList()
-
-    def addPaths(self, paths):
-        added = False
-        for p in paths:
-            if os.path.splitext(p)[1].lower() not in MEDIA_EXTENSIONS:
-                Log.info("Skipping non-media file: %s", p)
-                continue
-            if p not in self._paths:
-                self._paths.append(p)
-                self._addItem(p)
-                added = True
-        if added:
-            self.playlistModified.emit()
-
-    def highlightIndex(self, idx):
-        if idx is None or not (0 <= idx < self.trackList.count()):
-            return
-        self.trackList.blockSignals(True)
-        self.trackList.setCurrentRow(idx)
-        self.trackList.blockSignals(False)
-
-    def setNavEnabled(self, enabled):
-        self.btnPrev.setEnabled(enabled)
-        self.btnNext.setEnabled(enabled)
-
-    def setPlaying(self, isPlaying):
-        ico = "playPause" if isPlaying else "playStart"
-        self.btnPlay.setIcon(QtGui.QIcon(ICOMAP.ico(ico)))
-
-    def getPaths(self):
-        return list(self._paths)
-
-    def getName(self):
-        return self.nameEdit.text().strip()
-
-    # ---- private ----
-
-    def _addItem(self, path):
-        item = QtWidgets.QListWidgetItem(os.path.basename(path))
-        item.setToolTip(path)
-        self.trackList.addItem(item)
-
-    def _refreshList(self):
-        self.trackList.clear()
-        for p in self._paths:
-            self._addItem(p)
-
-    def _syncPathsFromList(self):
-        self._paths = [self.trackList.item(i).toolTip()
-                       for i in range(self.trackList.count())]
-        self.playlistModified.emit()
-
-    def _onDoubleClick(self, item):
-        self.requestPlay.emit(self.trackList.row(item))
-
-    def _onNew(self):
-        self._paths = []
-        self._sourcePath = None
-        self._lastAddDir = None
-        self.nameEdit.setText("")
-        self.trackList.clear()
-        self.requestNew.emit()
-
-    def _onAddFiles(self):
-        if self._sourcePath:
-            startDir = os.path.dirname(self._sourcePath)
-        elif self._paths:
-            startDir = os.path.dirname(self._paths[-1])
-        else:
-            startDir = os.path.expanduser("~")
-        result = QtWidgets.QFileDialog.getOpenFileNames(
-            self, "Add files", startDir,
-            f"Media ({_formatExts(MEDIA_EXTENSIONS)});;All files (*)"
-        )
-        if result[0]:
-            self._lastAddDir = os.path.dirname(result[0][0])
-            self.addPaths(result[0])
-
-    def _onDeleteSelected(self):
-        row = self.trackList.currentRow()
-        if row >= 0:
-            self.trackList.takeItem(row)
-            del self._paths[row]
-            self.playlistModified.emit()
-
-    def _onFilesDropped(self, paths):
-        self.addPaths(paths)
-
-    def _onSave(self):
-        name = self.nameEdit.text().strip() or "playlist"
-        if self._lastAddDir:
-            base = self._lastAddDir
-        elif self._sourcePath:
-            base = os.path.dirname(self._sourcePath)
-        elif self._paths:
-            base = os.path.dirname(self._paths[-1])
-        else:
-            base = os.path.expanduser("~")
-        initial = os.path.join(base, name + ".m3u")
-        result = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save Playlist", initial,
-            "M3U Playlist (*.m3u);;All files (*)"
-        )
-        if not result[0]:
-            return
-        path = result[0]
-        self._sourcePath = path
-        self.nameEdit.setText(os.path.splitext(os.path.basename(path))[0])
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write('#EXTM3U\n')
-                for p in self._paths:
-                    f.write(p + '\n')
-        except Exception:
-            Log.exception("Saving playlist %s", path)
-
-
 class MainFrame(QtWidgets.QMainWindow):
     SLIDER_RESOLUTION = 1000 * 1000
     
@@ -937,7 +487,10 @@ class MainFrame(QtWidgets.QMainWindow):
         self.playlistPanel = PlaylistPanel(self, aPath)
         self.playlistPanel.hide()
         self._panelDirty = False
+        self._sliderSeeking = False
+        self.playlistManager = PlaylistManager()
         self.initUI()
+        self.slideshowCtrl = SlideshowController(self.player, self)
         self.centerWindow()
         self.show()
         QtCore.QTimer.singleShot(50, self.__queueStarted)
@@ -1052,7 +605,7 @@ class MainFrame(QtWidgets.QMainWindow):
         # --- shortcut for fullscreen toggle ---
         # F11 Shortcut is defined in the fullscreen action
         QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Escape), self, activated=self._setNormalScreen)
-        self.player.triggerInitialized.connect(self._initIcon)
+        self.player.triggerInitialized.connect(self._showIdleIcon)
         self.player.onError.connect(self._onPlayerError)
 
     def takeScreenShot(self):
@@ -1097,6 +650,7 @@ class MainFrame(QtWidgets.QMainWindow):
             self._onSubtitleChanged(True)
         
     def _prepareNextStream(self, streamData):
+        self.player.hideImage()
         isAudio = self.player.isAudioOnly
         isVideo = not isAudio
         self.languagebox.setEnabled(isVideo)
@@ -1112,9 +666,9 @@ class MainFrame(QtWidgets.QMainWindow):
                 pass
         if isAudio:
             if HAS_SPECTRUM and self.settings.hasEQ() and self.player.isPlaying():
-                self.player.startCapture()
+                self.player.spectrumCtrl.startCapture()
         else:
-            self.player.stopCapture()
+            self.player.spectrumCtrl.stopCapture()
         if isVideo:
             self._updateLang(streamData)
             if self.settings.hasSubtitles():
@@ -1134,8 +688,8 @@ class MainFrame(QtWidgets.QMainWindow):
             self.audioMapping["Mute"] = (0, 0)
             akeys = [k for k in self.audioMapping.keys() if self.audioMapping[k][0] >= 0 ]
             if len(akeys) == 1 and audioCount > 0:
-                self.audioMapping["Audio"] = (1, 0)
-                akeys = ["Audio", "Mute"]
+                self.audioMapping["AudioPlay"] = (1, 0)
+                akeys = ["AudioPlay", "Mute"]
 
             self.languagebox.addItems(akeys)
         self.languagebox.blockSignals(False)
@@ -1152,12 +706,12 @@ class MainFrame(QtWidgets.QMainWindow):
     # #settings callback 2
     def _onEQChanged(self, isSelected):
         if isSelected and self.player.isAudioOnly:
-            self.player.startCapture()
+            self.player.spectrumCtrl.startCapture()
         else:
-            self.player.stopCapture()
+            self.player.spectrumCtrl.stopCapture()
 
     def _onSpectrumModeChanged(self, mode):
-        self.player._specOverlay.mode = mode
+        self.player.spectrumCtrl.setMode(mode)
 
     def _createSlider(self):
         self.ui_Slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
@@ -1169,6 +723,8 @@ class MainFrame(QtWidgets.QMainWindow):
         self.ui_Slider.setToolTip("Time track")
         self.ui_Slider.setTickInterval(0)
         self.ui_Slider.valueChanged.connect(self._onSliderMoved)
+        self.ui_Slider.sliderPressed.connect(self._onSliderPressed)
+        self.ui_Slider.sliderReleased.connect(self._onSliderReleased)
         
         self.shortcutSeekRight = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Right), self)
         self.shortcutSeekRight.activated.connect(lambda: self.player.seekRelative(10))
@@ -1181,8 +737,9 @@ class MainFrame(QtWidgets.QMainWindow):
         self.shortcutPageDown = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_PageDown), self)
         self.shortcutPageDown.activated.connect(lambda: self.player.seekRelative(-60))        
 
-    def _initIcon(self):
-        self.player.mpv.loadfile("icons/easyPlay.png")
+    def _showIdleIcon(self):
+        iconPath = FFMPEGTools.OSTools().joinPathes(FFMPEGTools.OSTools().getWorkingDirectory(), "icons", "easyPlay.png")
+        self.player.showImage(iconPath)
 
     def _makeLayout(self):
         mainBox = QtWidgets.QVBoxLayout()
@@ -1204,29 +761,39 @@ class MainFrame(QtWidgets.QMainWindow):
         self.move(frameGm.topLeft())    
     
     def loadFile(self):
-        initalPath = self.player.getSourceDir()
         fileFilter = (
-            f"Media & Playlists ({_formatExts(MEDIA_EXTENSIONS | PLAYLIST_EXTENSIONS)})"
-            f";;Pictures ({_formatExts(PICTURE_EXTENSIONS)})"
-            f";;Playlists ({_formatExts(PLAYLIST_EXTENSIONS)})"
+            f"Media & Playlists ({self.playlistManager.formatExts(MEDIA_EXTENSIONS | PLAYLIST_EXTENSIONS)})"
+            f";;Pictures ({self.playlistManager.formatExts(PICTURE_EXTENSIONS)})"
+            f";;Playlists ({self.playlistManager.formatExts(PLAYLIST_EXTENSIONS)})"
             f";;All files (*)"
         )
-        result = QtWidgets.QFileDialog.getOpenFileName(parent=self, directory=initalPath, caption="Load Media", filter=fileFilter)
+        result = QtWidgets.QFileDialog.getOpenFileName(parent=self, directory=self.playlistManager.getLastDir(), caption="Load Media", filter=fileFilter)
         if result[0]:
             fn = self.__encodeQString(result)
+            self.playlistManager.setLastDir(fn)
             QtCore.QTimer.singleShot(10, lambda: self._switchStream(fn))
             
     
     def _switchStream(self, fn):
         if not fn:
             return
+        self.ui_NowPlaying.setText("")
         self.playlistPanel.setNavEnabled(False)
+        ext = FFMPEGTools.OSTools().getExtension(fn).lower()
+        self.playlistManager.setLastDir(fn)
+        if ext in PICTURE_EXTENSIONS:
+            self.updateWindowTitle(fn)
+            self.ui_NowPlaying.setText(OSTools().getFileNameOnly(fn))
+            self.playlistPanel.setTracks([], "")
+            self.player.showImage(fn)
+            return
+        self.player.hideImage()
         try:
             self.player.setStreamData(fn)
             self.updateWindowTitle(fn)
             if self.player.isPlaylist:
-                entries = _parsePlaylist(fn)
-                name = os.path.splitext(os.path.basename(fn))[0]
+                entries = self.playlistManager.parse(fn)
+                name = OSTools().getPathWithoutExtension(OSTools().getFileNameOnly(fn))
                 self.playlistPanel.setTracks(entries, name, sourcePath=fn)
                 self._panelDirty = False
                 if not self.playlistPanel.isVisible():
@@ -1236,7 +803,7 @@ class MainFrame(QtWidgets.QMainWindow):
                 self._panelDirty = False
             self.asyncPlay()
         except:
-            self._initIcon()
+            self._showIdleIcon()
             self.getErrorDialog("Invalid file", "%s is not a known media file" % (fn), "-").show()
     
     def __encodeQString(self, stringTuple):
@@ -1244,7 +811,9 @@ class MainFrame(QtWidgets.QMainWindow):
         return text
     
     def playVideo(self):
-        if self.player.isEOF():
+        if self.slideshowCtrl.isOverlayVisible():
+            self.slideshowCtrl.togglePlay()
+        elif self.player.isEOF():
             self.asyncPlay()
         else:
             QtCore.QTimer.singleShot(0, self.player.toggleVideoPlay)
@@ -1257,13 +826,19 @@ class MainFrame(QtWidgets.QMainWindow):
                 if not HAS_SPECTRUM:
                     self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy")
                 elif self.settings.hasEQ():
-                    self.player.startCapture()
+                    self.player.spectrumCtrl.startCapture()
         else:
             self.__enableActionsOnVideoPlay(True)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playStart")))
-            self.player.stopCapture()             
+            self.player.spectrumCtrl.stopCapture()             
 
     # manual slider - sync with gui    
+    def _onSliderPressed(self):
+        self._sliderSeeking = True
+
+    def _onSliderReleased(self):
+        QtCore.QTimer.singleShot(400, lambda: setattr(self, '_sliderSeeking', False))
+
     def _onSliderMoved(self, pos):
         if self.player.streamData:
             dur = self.player.duration
@@ -1275,20 +850,22 @@ class MainFrame(QtWidgets.QMainWindow):
             relpos = pos / self.SLIDER_RESOLUTION * dur 
         self.player.asyncSeek(relpos)
     
-    # running stream - syn with slider
+    # running stream - sync with slider
     @pyqtSlot(float)
     def _onSyncSlider(self, timepos):
         if timepos == self.ui_Slider.value():
+            return
+        if self._sliderSeeking or self.slideshowCtrl.isActive():
             return
         if not self.ui_Slider.isSliderDown():
             self.ui_Slider.blockSignals(True)
             dur = self.player.duration
             if dur == 0:
-                sliderPos=0
+                sliderPos = 0
             else:
-                sliderPos = self.SLIDER_RESOLUTION * timepos / dur 
+                sliderPos = self.SLIDER_RESOLUTION * timepos / dur
             self.ui_Slider.setSliderPosition(int(sliderPos))
-            self.ui_Slider.blockSignals(False)    
+            self.ui_Slider.blockSignals(False)
         s = int(timepos)
         ts = '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
         self.ui_InfoLabel.setText(ts + "  \u25C6  " + self.player.durString)
@@ -1296,7 +873,7 @@ class MainFrame(QtWidgets.QMainWindow):
     @pyqtSlot(str)
     def _onPlayerError(self, errorMsg):
         Log.error("MPV error: %s", errorMsg)
-        self._initIcon()
+        self._showIdleIcon()
         self.getErrorDialog("Invalid file", "Not a valid codec found", errorMsg).show()
     
     def __enableActionsOnVideoPlay(self, enable):
@@ -1312,7 +889,8 @@ class MainFrame(QtWidgets.QMainWindow):
         self.settings.changeEQ.connect(self._onEQChanged)
         self.settings.changeSub.connect(self._onSubtitleChanged)
         self.settings.changeSpectrum.connect(self._onSpectrumModeChanged)
-        self.player._specOverlay.mode = self.settings.getSpectrumMode()
+        self.settings.changeSlideDuration.connect(self.slideshowCtrl.onSlideDurationChanged)
+        self.player.spectrumCtrl.setMode(self.settings.getSpectrumMode())
         self.playlistPanel.requestPlay.connect(self._onPlaylistPlay)
         self.playlistPanel.requestPrev.connect(self.player.prevTrack)
         self.playlistPanel.requestNext.connect(self.player.nextTrack)
@@ -1339,14 +917,14 @@ class MainFrame(QtWidgets.QMainWindow):
         self.playlistPanel.setNavEnabled(False)
 
     def _onTrackChanged(self, _title):
-        """Re-probe when playlist advances to a new local file track."""
         path = self.player.mpv.path
         if not path or '://' in path:
             return
-        if path == getattr(self.player, '_probedPath', None):
-            return
-        self.asyncPlay(self.player._probeCurrentTrack)
-    
+        if not self.slideshowCtrl.onTrackChanged(path):
+            if path == getattr(self.player, '_probedPath', None):
+                return
+            self.asyncPlay(self.player._probeCurrentTrack)
+
     def asyncPlay(self, func=None):
         self.playlistThread = Worker(func or self.player.startPlaying)
         self.playlistThread.finished.connect(self.playlistThread.deleteLater)
@@ -1437,7 +1015,7 @@ class MainFrame(QtWidgets.QMainWindow):
                 <td style="border: 1px solid darkgray; padding: 8px 15px;">%s</td>
             </tr>
             <tr>
-                <td style="border: 1px solid darkgray; padding: 8px 15px;"><b>Audio codec:</b></td>
+                <td style="border: 1px solid darkgray; padding: 8px 15px;"><b>AudioPlay codec:</b></td>
                 <td style="border: 1px solid darkgray; padding: 8px 15px;">%s</td>
             </tr>
             </table>""" % (container.formatNames()[0], container.getBitRate(), container.getSizeKB() / 1024, streamData.isTransportStream(),isInterlaced, codec, w, h, ar, fr, ts, acodec)
@@ -1480,7 +1058,7 @@ class MainFrame(QtWidgets.QMainWindow):
 
     def closeEvent(self, __event: QCloseEvent) -> None:
         self.player.closePending = True
-        self.player.stopCapture()  # stop parec thread before Qt destroys child widgets
+        self.player.spectrumCtrl.stopCapture()  # stop parec thread before Qt destroys child widgets
         if self.playlistThread is not None:
             self.playlistThread.wait(3000)
 
@@ -1508,6 +1086,7 @@ class SettingsModel(QtCore.QObject):
     changeSub = pyqtSignal(object)
     changeEQ = pyqtSignal(object)
     changeSpectrum = pyqtSignal(str)
+    changeSlideDuration = pyqtSignal(int)
 
     def __init__(self, mainframe):
         # keep flags- save them later
@@ -1518,6 +1097,7 @@ class SettingsModel(QtCore.QObject):
         self.showSubs = ep_config.getBoolean("subtitles", False)  # id if subtitle should be presented. mpv only
         self.spectrumMode = ep_config.get("spectrumMode", "heat")
         self.softwareRender = ep_config.getBoolean("softwareRender", False)
+        self.slideDuration = ep_config.getInt("slideDuration", SLIDE_DURATION)
         self.isoCodes = []
     
     def sync(self):
@@ -1533,6 +1113,7 @@ class SettingsModel(QtCore.QObject):
         
         ep_config.set("spectrumMode", self.spectrumMode)
         ep_config.set("softwareRender", str(self.softwareRender))
+        ep_config.set("slideDuration", str(self.slideDuration))
         # SET the icoset
         ep_config.set("icoSet", self.iconSet)
         
@@ -1575,6 +1156,14 @@ class SettingsModel(QtCore.QObject):
         self.softwareRender = aBool
         self.__update()
 
+    def getSlideDuration(self):
+        return self.slideDuration
+
+    def setSlideDuration(self, seconds):
+        self.slideDuration = seconds
+        self.__update()
+        self.changeSlideDuration.emit(seconds)
+
 class SettingsDialog(QtWidgets.QDialog):
 
     def __init__(self, parent, model):
@@ -1602,7 +1191,7 @@ class SettingsDialog(QtWidgets.QDialog):
         frame1.setLineWidth(1)
         frame2 = QtWidgets.QGroupBox("Requires restart")
        
-        self.showEQ = QtWidgets.QCheckBox("Show EQ - Audio only")
+        self.showEQ = QtWidgets.QCheckBox("Show EQ - AudioPlay only")
         self.showEQ.setToolTip("Display an EQ on music")
         self.showEQ.setChecked(self.model.hasEQ())
         self.showEQ.stateChanged.connect(self._onEQChanged)
@@ -1634,10 +1223,22 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setIconTheme.setToolTip("Select icon theme - restart to take effect")
 
         clickBox = QtWidgets.QVBoxLayout(frame1)
+        self.slideDuration = QtWidgets.QSpinBox()
+        self.slideDuration.setRange(1, 3600)
+        self.slideDuration.setSuffix(" sec")
+        self.slideDuration.setValue(self.model.getSlideDuration())
+        self.slideDuration.setToolTip("How long each image is shown in a slideshow playlist")
+        self.slideDuration.valueChanged.connect(self._onSlideDurationChanged)
+        slideDurationBox = QtWidgets.QHBoxLayout()
+        slideDurationBox.addWidget(QtWidgets.QLabel("Slideshow image duration:"))
+        slideDurationBox.addWidget(self.slideDuration)
+        slideDurationBox.addStretch(1)
+
         clickBox.addWidget(self.showEQ)
         clickBox.addWidget(spectrumLabel)
         clickBox.addWidget(self.spectrumMode)
         clickBox.addWidget(self.showSub)
+        clickBox.addLayout(slideDurationBox)
 
         iconThemeBox = QtWidgets.QHBoxLayout()
         iconThemeBox.addWidget(QtWidgets.QLabel("Icon theme:"))
@@ -1668,6 +1269,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _onIconThemeChanged(self, text):
         self.model.setIconSet(text)
+
+    def _onSlideDurationChanged(self, seconds):
+        self.model.setSlideDuration(seconds)
 
 
 class IconMapper():
@@ -1812,7 +1416,8 @@ def main():
         OSTools().setMainWorkDir(wd)
         ep_config = ConfigAccessor(AppName, "ep.ini")  # folder,name&section
         ep_config.read();    
-        ICOMAP = IconMapper(ep_config.get("icoSet", "default"))  
+        ICOMAP = IconMapper(ep_config.get("icoSet", "default"))
+        Playlist.init(ep_config, ICOMAP)
         argv = sys.argv
         res = parseOptions(argv)
         res["virtual"] = res["virtual"] or ep_config.getBoolean("softwareRender", False)
@@ -1821,7 +1426,7 @@ def main():
         if de not in OSTools.QT_DESKTOPS:        
             OSTools().setGTKEnvironment()
             Log.info("GTK based - switched to QT_QPA_PLATFORM = xcb" )
-        os.environ['QT_LOGGING_RULES'] = 'qt.svg=false'
+        OSTools().setEnv('QT_LOGGING_RULES', 'qt.svg=false')
         app = QApplication(argv)
         app._sigTimer = installSigIntHandler(app)
         

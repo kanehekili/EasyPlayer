@@ -138,6 +138,12 @@ class OSTools():
     def canReadFromFolder(self,path):
         return os.access(path,os.R_OK)
 
+    def setEnv(self, key, value):
+        os.environ[key] = value
+
+    def isDirectory(self, path):
+        return os.path.isdir(path)
+
     def ensureDirectory(self, path, tail=None):
         # make sure the target dir is present
         if tail is not None:
@@ -171,6 +177,52 @@ class OSTools():
 
     def isRoot(self):
         return os.geteuid()==0
+
+    def parsePlaylist(self, path):
+        """Parse playlist file and return list of absolute paths/URLs."""
+        base = os.path.dirname(os.path.abspath(path))
+        _, ext = os.path.splitext(path)
+        ext = ext.lower()
+        entries = []
+
+        def resolve(p):
+            p = p.strip()
+            if not p:
+                return None
+            if '://' in p:
+                return p
+            if not os.path.isabs(p):
+                p = os.path.join(base, p)
+            return p
+
+        try:
+            if ext in ('.m3u', '.m3u8'):
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            r = resolve(line)
+                            if r:
+                                entries.append(r)
+            elif ext == '.pls':
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        m = re.match(r'File\d+=(.+)', line.strip(), re.IGNORECASE)
+                        if m:
+                            r = resolve(m.group(1))
+                            if r:
+                                entries.append(r)
+            elif ext == '.xspf':
+                import xml.etree.ElementTree as ET
+                ns = {'x': 'http://xspf.org/ns/0/'}
+                for loc in ET.parse(path).findall('.//x:location', ns):
+                    if loc.text:
+                        r = resolve(loc.text)
+                        if r:
+                            entries.append(r)
+        except Exception:
+            Log.exception("Parsing playlist %s", path)
+        return entries
 
     def countFiles(self,aPath,searchString):
         log_dir=os.path.dirname(aPath)
@@ -710,7 +762,7 @@ class FFStreamProbe():
             Log.debug("isVideo: %r", s.isVideo())
             Log.debug("interlaced: %r",self.interlaced)
         
-        Log.debug("-------- Audio -------------")
+        Log.debug("-------- AudioPlay -------------")
         s = self.getAudioStream()
         if s:  
             Log.debug("Index:%d", s.getStreamIndex())
@@ -912,7 +964,7 @@ class FFStreamProbe():
         print ("isAudio: ", s.isAudio())
         print ("isVideo: ", s.isVideo())
         
-        print ("-------- Audio -------------")
+        print ("-------- AudioPlay -------------")
         s = self.getAudioStream()  
         if not s:
             print ("No audio")
@@ -1146,7 +1198,7 @@ class VideoStreamInfo():
         return self.NA
  
     '''
-    bitrate in kb (int)-Audio only
+    bitrate in kb (int)-AudioPlay only
     '''
 
     def getBitRate(self):

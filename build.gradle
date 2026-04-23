@@ -182,6 +182,7 @@ tasks.register("build_all") {
     group       = "packaging"
     dependsOn "updateMPV"
     dependsOn tasks.matching { t -> t.name.startsWith("build_") && t.name != "build_all" }
+    doLast { delete file("${outDir}/stage") }
 }
 
 defaultTasks "build_all"
