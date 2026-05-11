@@ -47,6 +47,13 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 * Can be set via the "Settings dialog - Software mode" as well. 
 
 
+#### Install via pip (all distros)
+Install system dependencies first (libmpv, ffmpeg), then:
+```
+pip install easympv
+```
+Launch with `easyplayer` or open a file with `easyplayer /path/to/video.mp4`
+
 #### Install via ppa on Linux Mint or Ubuntu (Mint 22.2, Ubuntu 22.04 and newer versions)
 ```
 sudo add-apt-repository ppa:jentiger-moratai/mediatools

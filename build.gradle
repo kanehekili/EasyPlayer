@@ -65,6 +65,24 @@ pkgname = easyplayer
 """
 }
 
+// ── update README version references ─────────────────────────────────────────
+
+tasks.register("update_readme") {
+    description = "Rewrite version references in README.md to match settings.gradle"
+    group       = "packaging"
+    doLast {
+        def readme = file("README.md")
+        def text   = readme.text
+        text = text.replaceAll(/Version \d+\.\d+\.\d+/, "Version ${version}")
+        text = text.replaceAll(
+            /https:\/\/github\.com\/kanehekili\/EasyPlayer\/releases\/download\/[\d.]+\/easyplayer[\d.]+\.tar/,
+            "https://github.com/kanehekili/EasyPlayer/releases/download/${version}/easyplayer${version}.tar"
+        )
+        readme.text = text
+        println "  README.md synced to version ${version}"
+    }
+}
+
 // ── update mpv binding ────────────────────────────────────────────────────────
 
 tasks.register("updateMPV") {
@@ -169,6 +187,52 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
     }
 }
 
+// ── PyPI ──────────────────────────────────────────────────────────────────────
+
+tasks.register("build_pypi") {
+    description = "Stage dist/pypi/ ready for 'python -m build'"
+    group       = "packaging"
+    dependsOn   "update_readme"
+
+    doLast {
+        def pypiOut = file("${outDir}/pypi")
+        def pkgDir  = file("${pypiOut}/easyplayer")
+        pkgDir.mkdirs()
+
+        stageSources(pkgDir)
+
+        // Patch absolute lib import → relative so the installed package resolves it
+        def epFile = file("${pkgDir}/EasyPlayer.py")
+        epFile.text = epFile.text.replace("from lib.mpv import", "from .lib.mpv import")
+
+        // lib/ must be a proper subpackage for the relative import to work
+        file("${pkgDir}/lib/__init__.py").text = ""
+        file("${pkgDir}/__init__.py").text = ""
+
+        copy {
+            from "build/pypi-template"
+            into pypiOut
+            filter(ReplaceTokens, tokens: tok([xxx: version]))
+        }
+
+        // README for PyPI — fix screenshot URLs and drop the GitHub release download badge
+        copy {
+            from "README.md"
+            into pypiOut
+            filter { line ->
+                if (line.contains('releases/download')) return null
+                line.replace(
+                    'https://github.com/kanehekili/EasyPlayer/blob/main/',
+                    'https://raw.githubusercontent.com/kanehekili/EasyPlayer/main/'
+                )
+            }
+        }
+
+        println "  PyPI stage ready: ${pypiOut}"
+        println "  Run:  cd ${pypiOut} && python -m build"
+    }
+}
+
 // ── aggregate ─────────────────────────────────────────────────────────────────
 
 tasks.register("clean") {
@@ -178,9 +242,10 @@ tasks.register("clean") {
 }
 
 tasks.register("build_all") {
-    description = "Build all packages: AUR, DEB x${distros.count { it.value.type == 'ubuntu' }}"
+    description = "Build all packages: PyPI, AUR, DEB x${distros.count { it.value.type == 'ubuntu' }}"
     group       = "packaging"
     dependsOn "updateMPV"
+    dependsOn "update_readme"
     dependsOn tasks.matching { t -> t.name.startsWith("build_") && t.name != "build_all" }
     doLast { delete file("${outDir}/stage") }
 }
