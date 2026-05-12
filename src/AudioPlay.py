@@ -5,11 +5,12 @@ import FFMPEGTools
 
 Log = FFMPEGTools.Log
 
+HAS_SPECTRUM = False
 try:
     import numpy as np
     HAS_SPECTRUM = True
 except ImportError:
-    HAS_SPECTRUM = False
+    pass
 
 SPECTRUM_SAMPLE_RATE = 44100
 SPECTRUM_BLOCK_SIZE = 4096
@@ -123,6 +124,7 @@ class SpectrumController(QtCore.QObject):
         super().__init__()
         self._player = player
         self._specStream = None
+        self._monitorDevice = None
         self._overlay = SpectrumOverlay(player)
         self._overlay.hide()
 
@@ -170,11 +172,14 @@ class SpectrumController(QtCore.QObject):
         self._overlay.clearMags()
 
     def _findMonitorDevice(self):
+        if self._monitorDevice:
+            return self._monitorDevice
         try:
             result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 monitor = result.stdout.strip() + '.monitor'
                 Log.info("Spectrum: using parec with monitor source %s", monitor)
+                self._monitorDevice = monitor
                 return monitor
         except Exception:
             pass

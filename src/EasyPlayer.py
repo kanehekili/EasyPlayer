@@ -43,6 +43,7 @@ global Log
 global AppName
 AppName="EasyPlayer"
 Log = FFMPEGTools.Log
+AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "CosmicRock.jpg")
 #####################################################
 Version = "@xxx@"
 #####################################################
@@ -232,7 +233,7 @@ class Player(QOpenGLWidget):
     def _onMediaTitle(self, _name, val):
         if self.closePending:
             return
-        if val:
+        if val and self.isPlaylist:
             self.playlistTrackChanged.emit(val)
 
     def nextTrack(self):
@@ -375,11 +376,7 @@ class Player(QOpenGLWidget):
         if self.mpv is None:
             self.syncPlayStatus.emit(False)
             return
-        if self.mpv.eof_reached:
-            self.mpv.pause = True
-            self.syncPlayStatus.emit(False)
-            return
-        playing = self.mpv.pause  # what a dreher... playing= NOT pause
+        playing = self.mpv.pause
         self.mpv.pause = not playing
         self.syncPlayStatus.emit(playing)
 
@@ -470,6 +467,25 @@ class Player(QOpenGLWidget):
 
 
 
+class AudioDisplayController:
+    def __init__(self, player, settings, fallbackImage):
+        self._player = player
+        self._settings = settings
+        self._fallbackImage = fallbackImage
+
+    def update(self):
+        if not self._player.isAudioOnly:
+            self._player.spectrumCtrl.stopCapture()
+            return
+        if self._settings.hasEQ():
+            self._player.hideImage()
+            self._player.spectrumCtrl.startCapture()
+        else:
+            self._player.spectrumCtrl.stopCapture()
+            if not self._player.mpv.vid:
+                self._player.showImage(self._fallbackImage)
+
+
 class MainFrame(QtWidgets.QMainWindow):
     SLIDER_RESOLUTION = 1000 * 1000
     
@@ -491,6 +507,7 @@ class MainFrame(QtWidgets.QMainWindow):
         self.playlistManager = PlaylistManager()
         self.initUI()
         self.slideshowCtrl = SlideshowController(self.player, self)
+        self.audioDisplayCtrl = AudioDisplayController(self.player, self.settings, AUDIO_FALLBACK_IMAGE)
         self.centerWindow()
         self.show()
         QtCore.QTimer.singleShot(50, self.__queueStarted)
@@ -665,8 +682,7 @@ class MainFrame(QtWidgets.QMainWindow):
             except Exception:
                 pass
         if isAudio:
-            if HAS_SPECTRUM and self.settings.hasEQ() and self.player.isPlaying():
-                self.player.spectrumCtrl.startCapture()
+            self.audioDisplayCtrl.update()
         else:
             self.player.spectrumCtrl.stopCapture()
         if isVideo:
@@ -705,10 +721,7 @@ class MainFrame(QtWidgets.QMainWindow):
 
     # #settings callback 2
     def _onEQChanged(self, isSelected):
-        if isSelected and self.player.isAudioOnly:
-            self.player.spectrumCtrl.startCapture()
-        else:
-            self.player.spectrumCtrl.stopCapture()
+        self.audioDisplayCtrl.update()
 
     def _onSpectrumModeChanged(self, mode):
         self.player.spectrumCtrl.setMode(mode)
@@ -811,10 +824,8 @@ class MainFrame(QtWidgets.QMainWindow):
         return text
     
     def playVideo(self):
-        if self.slideshowCtrl.isOverlayVisible():
+        if self.slideshowCtrl.isActive():
             self.slideshowCtrl.togglePlay()
-        elif self.player.isEOF():
-            self.asyncPlay()
         else:
             QtCore.QTimer.singleShot(0, self.player.toggleVideoPlay)
 
@@ -822,11 +833,8 @@ class MainFrame(QtWidgets.QMainWindow):
         if isPlaying:
             self.__enableActionsOnVideoPlay(False)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playPause")))
-            if self.player.isAudioOnly:
-                if not HAS_SPECTRUM:
-                    self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy")
-                elif self.settings.hasEQ():
-                    self.player.spectrumCtrl.startCapture()
+            if self.player.isAudioOnly and not HAS_SPECTRUM:
+                self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy")
         else:
             self.__enableActionsOnVideoPlay(True)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playStart")))
@@ -919,6 +927,8 @@ class MainFrame(QtWidgets.QMainWindow):
     def _onTrackChanged(self, _title):
         path = self.player.mpv.path
         if not path or '://' in path:
+            return
+        if self.playlistThread is not None:
             return
         if not self.slideshowCtrl.onTrackChanged(path):
             if path == getattr(self.player, '_probedPath', None):
