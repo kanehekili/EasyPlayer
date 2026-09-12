@@ -1,7 +1,7 @@
 # EasyPlayer
-Version 1.4.1
+Version 1.5.0
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.4.1/easyplayer1.4.1.tar)
+![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.5.0/easyplayer1.5.0.tar)
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
@@ -19,6 +19,7 @@ Configurable Spectrum Analyzer:
 * Fedora: python3-pillow-qt and mpv-libs.x86_64
 * ffmpeg > 3.X to 8.X
 * python3-pyqt6
+* The test suite in `tests/` needs nothing beyond the above - see [tests/README.md](tests/README.md)
 
 #### Set GTK Theme for this QT application
 If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might set QT_QPA_PLATFORMTHEME:
@@ -33,8 +34,19 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 * Has been tested with interlaced video and 4K 
 * Subtitles can be shown (settings)
 * Playlist support
-* Picture/image viewer (png, jpg, bmp, gif, webp, tiff)
+* Picture/image viewer (png, jpg, bmp, gif, webp, tiff, avif, heic)
+    * Formats without a Qt image plugin (avif, heic) are decoded via ffmpeg
+* Opening a single file loads its whole folder - including subfolders
+    * Only the file you opened is shown; nothing advances on its own
+    * Next/Prev step to the next or previous picture/video (green arrows, or Ctrl+Left / Ctrl+Right) - a video plays at once and stops at its end, an image waits
+    * Next/Prev wrap around at the ends of the list; a running slideshow still stops at the last item
+    * Press play to run through the rest of the folder as a slideshow (videos included)
+    * Window title and info line follow the file currently shown
 * Slideshow with configurable timeout
+* Zoom with Ctrl + mouse wheel - works for videos and pictures
+    * Zooms in on the mouse pointer, from 100% up to 800%
+    * While zoomed in, drag with the left mouse button to move the visible section
+    * The cursor turns into a hand as soon as the zoom is active
 * Flat and non flat icon set
 * Language can be selected
 * Supports an EQ-display for audio files - Some distros need to install python3-sounddevice via pip. (Not mandatory) 
@@ -80,7 +92,7 @@ Select video and open it with "Open with ->EasyPlayer", oder via terminal "easyp
 
 #### Install dependencies manually on Linux Mint or Ubuntu (tested from noble to resolute)
 ```
-sudo apt –no-install-recommends install python3-pyqt6 ffmpeg python3-pil libmpv2
+sudo apt install --no-install-recommends python3-pyqt6 ffmpeg python3-pil libmpv2
 ```
 
 #### Install dependencies on Fedora
@@ -107,6 +119,18 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
 ### Changes 
+10.09.2026
+* Zoom for videos and pictures via Ctrl + mouse wheel, pan the zoomed image with the left mouse button
+* Opening a file queues its whole folder tree - next/prev step through it, play runs it as a slideshow
+* Next/Prev buttons added to the toolbar
+* Added mts, m2ts, avif and heic; pictures now show up in the default file dialog filter
+* Window title follows the current track - the media title, or the file name when there is none
+* Reworked play/pause: browsing shows one item at a time (a video plays once, an image holds), pressing play runs the show from the current item, and the button always reflects what is happening
+* Next/Prev wrap around at the ends of the list
+* The folder scan sorts like a file manager: case-insensitive, numbers as numbers
+* The playlist panel shows subfolder entries with their relative path (VD/song.mp4)
+* Fixed the playlist panel button icon in the default icon set
+
 12.05.2026
 * Fix pause/play logic, audio display management, and PyDev import
 

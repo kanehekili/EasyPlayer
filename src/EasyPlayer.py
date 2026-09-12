@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# copyright (c) 2025 kanehekili (kanehekili.media@gmail.com)
+# copyright (c) 2026 kanehekili (kanehekili.media@gmail.com)
 # This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License,
 # as published by the Free Software Foundation, either version 2 of the License, or (at your option) any
 # later version.
@@ -29,7 +29,7 @@ from PyQt6.QtCore import QByteArray, pyqtSignal, pyqtSlot, QThread
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
-import sys, json, FFMPEGTools, getopt, traceback, locale, re
+import sys, json, FFMPEGTools, getopt, traceback, locale, re, math
 from threading import Condition
 from QtTools import SliderThread, installSigIntHandler
 from Slideshow import ImageOverlay, SlideshowController, PICTURE_EXTENSIONS
@@ -68,7 +68,9 @@ class Player(QOpenGLWidget):
     syncPlayStatus = pyqtSignal(int)
     onError = pyqtSignal(str)
     playlistTrackChanged = pyqtSignal(str)
-    
+    zoomChanged = pyqtSignal(bool)
+    itemEnded = pyqtSignal()  # current track played to its end (mpv thread -> queued)
+
     def __init__(self, parent, path=None, isVirtual=False):
         super().__init__(parent)
         self.closePending = False
@@ -83,6 +85,7 @@ class Player(QOpenGLWidget):
         self._hookEvents()
         self._proc_addr_wrapper = MpvGlGetProcAddressFn(get_process_address)
         self.triggerUpdate.connect(self.do_update)  # works only if video
+        self.zoomChanged.connect(self._onZoomChanged)  # queued if mpv/worker thread
         self.setUpdateBehavior(QOpenGLWidget.UpdateBehavior.PartialUpdate)
         self.duration = 0
         self.sliderThread = None
@@ -91,6 +94,8 @@ class Player(QOpenGLWidget):
         self.durString = "00:00:00"
         self._opengl_fbo = None
         self.spectrumCtrl = SpectrumController(self)
+        self.zoomCtrl = ZoomController(self)
+        self._dragPos = None
         self._imageOverlay = ImageOverlay(self)
         self._imageOverlay.hide()
         self.playlistManager = PlaylistManager()
@@ -182,6 +187,50 @@ class Player(QOpenGLWidget):
         self.spectrumCtrl.setGeometry(0, 0, w, h)
         self._imageOverlay.setGeometry(0, 0, w, h)
 
+    def wheelEvent(self, event):
+        if event.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier and self.zoomCtrl.isZoomable():
+            delta = event.angleDelta().y()
+            if delta:
+                pos = event.position()
+                self.zoomCtrl.zoomAt(delta / 120.0, pos.x(), pos.y())
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+    @pyqtSlot(bool)
+    def _onZoomChanged(self, isActive):
+        if self._dragPos is not None:
+            return  # keep the closed hand until the drag ends
+        if isActive:
+            self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+        else:
+            self.unsetCursor()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and self.zoomCtrl.isActive():
+            self._dragPos = event.position()
+            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragPos is not None:
+            pos = event.position()
+            self.zoomCtrl.panBy(pos.x() - self._dragPos.x(), pos.y() - self._dragPos.y())
+            self._dragPos = pos
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._dragPos is not None and event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._dragPos = None
+            self._onZoomChanged(self.zoomCtrl.isActive())
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def paintGL(self):
         if self.ctx and self._opengl_fbo:
             sc = self.devicePixelRatio()
@@ -193,11 +242,13 @@ class Player(QOpenGLWidget):
         super().paintEvent(event)
 
     def showImage(self, path):
+        self.zoomCtrl.resetState()
         self._imageOverlay.setImage(path)
         self._imageOverlay.show()
         self._imageOverlay.raise_()
 
     def hideImage(self):
+        self.zoomCtrl.resetState()
         self._imageOverlay.clearImage()
         self._imageOverlay.hide()
 
@@ -210,25 +261,19 @@ class Player(QOpenGLWidget):
             self.triggerUpdate.emit(self._timePos)
 
     def _onPlayEnd(self, _name, val):
-        if self.closePending:
+        if self.closePending or val != True:
             return
-        if val == True:
-            if self.isPlaylist:
-                path = self.mpv.path
-                if path and OSTools().getExtension(path).lower() in PICTURE_EXTENSIONS:
-                    return
-                try:
-                    pos = self.mpv.playlist_pos
-                    count = len(self.mpv.playlist)
-                    if pos is not None and pos < count - 1:
-                        self.mpv.playlist_next('weak')
-                    else:
-                        self.mpv.pause = True
-                        self.syncPlayStatus.emit(False)
-                except Exception:
-                    self.syncPlayStatus.emit(False)
-            else:
-                self.toggleVideoPlay()
+        path = self.mpv.path
+        if path and OSTools().getExtension(path).lower() in PICTURE_EXTENSIONS:
+            return  # stills are timed by the slideshow, not by mpv
+        self.itemEnded.emit()
+
+    def hasNextTrack(self):
+        try:
+            pos = self.mpv.playlist_pos
+            return pos is not None and pos < len(self.mpv.playlist) - 1
+        except Exception:
+            return False
 
     def _onMediaTitle(self, _name, val):
         if self.closePending:
@@ -237,23 +282,31 @@ class Player(QOpenGLWidget):
             self.playlistTrackChanged.emit(val)
 
     def nextTrack(self):
+        """Manual navigation wraps around. A running show never calls this at
+        the last item (onItemEnded checks hasNextTrack), so shows still end."""
         try:
-            self.mpv.playlist_next()
+            count = len(self.mpv.playlist)
+            if count > 1 and self.mpv.playlist_pos == count - 1:
+                self.mpv.playlist_pos = 0          # wrap to the first item
+            else:
+                self.mpv.playlist_next()
         except Exception:
             Log.info("no nextTrack")
 
     def prevTrack(self):
         try:
-            self.mpv.playlist_prev()
+            count = len(self.mpv.playlist)
+            if count > 1 and self.mpv.playlist_pos == 0:
+                self.mpv.playlist_pos = count - 1  # wrap to the last item
+            else:
+                self.mpv.playlist_prev()
         except Exception:
             Log.info("no prevTrack")
 
     def jumpToTrack(self, idx):
-        """Jump to a specific playlist index and unpause."""
+        """Jump to a specific playlist index. Transport is applied by PlaybackController."""
         try:
             self.mpv.playlist_pos = idx
-            self.mpv.pause = False
-            self.syncPlayStatus.emit(True)
         except Exception:
             Log.info("jumpToTrack %d failed", idx)
 
@@ -266,27 +319,22 @@ class Player(QOpenGLWidget):
         self.lastError = None
         self._probedPath = None
         if not paths:
-            self.syncPlayStatus.emit(False)
+            self.fileLoaded.emit()
             return
-        self.mpv.loadfile(paths[0], 'replace')
-        for p in paths[1:]:
+        self.mpv.stop()
+        self.mpv.playlist_clear()
+        startIdx = max(0, min(startIdx, len(paths) - 1))
+        # playlist-start keeps mpv from auto-starting entry 0 while we append;
+        # playlist-play-index then starts exactly the file that was opened
+        self.mpv['playlist-start'] = startIdx
+        for p in paths:
             self.mpv.loadfile(p, 'append')
+        self.mpv.command('playlist-play-index', startIdx)
         self._getReady()
         if self.lastError:
-            self.syncPlayStatus.emit(False)
+            self.fileLoaded.emit()
             return
-        if startIdx > 0 and startIdx < len(paths):
-            self.mpv.playlist_pos = startIdx
-            self._getReady()
-            if self.lastError:
-                self.syncPlayStatus.emit(False)
-                return
         self._probeCurrentTrack()
-        if not self.lastError:
-            self.mpv.pause = False
-            self.syncPlayStatus.emit(True)
-        else:
-            self.syncPlayStatus.emit(False)
 
     def _probeCurrentTrack(self):
         if self.closePending or not self.mpv:
@@ -298,6 +346,7 @@ class Player(QOpenGLWidget):
         if path == getattr(self, '_probedPath', None):
             return
         self._probedPath = path
+        self.zoomCtrl.reset()
         self.streamData = None
         try:
             sd = FFStreamProbe(path)
@@ -335,11 +384,8 @@ class Player(QOpenGLWidget):
             self._getReady()
             if not self.lastError:
                 self._probeCurrentTrack()
-                if not self.lastError:
-                    self.mpv.pause = False
-                    self.syncPlayStatus.emit(True)
-                    return
-        self.syncPlayStatus.emit(False)
+                return
+        self.fileLoaded.emit()
     
     def _getReady(self):
         self.seekLock = Condition()
@@ -372,13 +418,9 @@ class Player(QOpenGLWidget):
     def isEOF(self):
         return self.mpv.eof_reached
 
-    def toggleVideoPlay(self):
-        if self.mpv is None:
-            self.syncPlayStatus.emit(False)
-            return
-        playing = self.mpv.pause
-        self.mpv.pause = not playing
-        self.syncPlayStatus.emit(playing)
+    def setPaused(self, paused):
+        if self.mpv is not None:
+            self.mpv.pause = paused
 
     def setAudio(self, idx):
         if idx == 0:
@@ -467,6 +509,180 @@ class Player(QOpenGLWidget):
 
 
 
+ZOOM_MAX = 8.0  # 800%
+ZOOM_STEP = 1.1  # per wheel notch
+
+
+class ZoomController:
+    """Pointer-centred zoom for video (mpv video-zoom/video-pan) and for stills
+    (ImageOverlay transform). Never below 100%."""
+
+    def __init__(self, player):
+        self.player = player
+        self.factor = 1.0
+        self.panX = 0.0
+        self.panY = 0.0
+
+    def resetState(self):
+        self.factor = 1.0
+        self.panX = 0.0
+        self.panY = 0.0
+        self.player.zoomChanged.emit(False)
+
+    def reset(self):
+        """called off the GUI thread - touch mpv only, the overlay resets itself"""
+        self.resetState()
+        self.player.mpv.video_zoom = 0.0
+        self.player.mpv.video_pan_x = 0.0
+        self.player.mpv.video_pan_y = 0.0
+
+    def isActive(self):
+        return self.factor > 1.0
+
+    def isZoomable(self):
+        srcW, __srcH = self._sourceSize()
+        return bool(srcW)
+
+    def zoomAt(self, steps, mx, my):
+        """steps: wheel notches (>0 = zoom in), mx/my: cursor in widget coords"""
+        target = max(1.0, min(ZOOM_MAX, self.factor * (ZOOM_STEP ** steps)))
+        if target == self.factor:
+            return
+        srcW, srcH = self._sourceSize()
+        if not srcW or not srcH:
+            return
+        w, h = self.player.width(), self.player.height()
+        fit = min(w / srcW, h / srcH)
+        self.panX = self._pan(mx, w, srcW * fit * self.factor, srcW * fit * target, self.panX)
+        self.panY = self._pan(my, h, srcH * fit * self.factor, srcH * fit * target, self.panY)
+        self.factor = target
+        self._apply()
+
+    def panBy(self, dx, dy):
+        """shift the visible section by a mouse delta in widget coords"""
+        srcW, srcH = self._sourceSize()
+        if not srcW or not srcH:
+            return
+        w, h = self.player.width(), self.player.height()
+        fit = min(w / srcW, h / srcH)
+        sizeX, sizeY = srcW * fit * self.factor, srcH * fit * self.factor
+        self.panX = self._clampPan(self.panX + dx / sizeX, w, sizeX)
+        self.panY = self._clampPan(self.panY + dy / sizeY, h, sizeY)
+        self._apply()
+
+    def _pan(self, pos, winSize, oldSize, newSize, pan):
+        start = (winSize - oldSize) / 2 + pan * oldSize
+        rel = (pos - start) / oldSize  # cursor position inside the source, 0..1
+        newPan = (pos - rel * newSize - (winSize - newSize) / 2) / newSize
+        return self._clampPan(newPan, winSize, newSize)
+
+    def _clampPan(self, pan, winSize, size):
+        limit = max(0.0, (size - winSize) / (2 * size))
+        return max(-limit, min(limit, pan))
+
+    def _overlay(self):
+        overlay = self.player._imageOverlay
+        return overlay if overlay.isVisible() else None
+
+    def _sourceSize(self):
+        overlay = self._overlay()
+        if overlay:
+            return overlay.imageSize()
+        try:
+            return self.player.mpv.dwidth, self.player.mpv.dheight
+        except Exception:
+            return None, None
+
+    def _apply(self):
+        self.player.zoomChanged.emit(self.isActive())
+        overlay = self._overlay()
+        if overlay:
+            overlay.setTransform(self.factor, self.panX, self.panY)
+            return
+        self.player.mpv.video_zoom = math.log2(self.factor)
+        self.player.mpv.video_pan_x = self.panX
+        self.player.mpv.video_pan_y = self.panY
+        self.player.update()
+
+
+class PlaybackController:
+    """Single source of truth for "is the player advancing?".
+
+    playing : transport - the slide timer runs / mpv is unpaused. This is what
+              the play button shows and toggles.
+    follow  : when the current item ends, move to the next one. Only an explicit
+              play press turns it on.
+
+    Everything else derives from these two. This is the only place that emits
+    syncPlayStatus.
+    """
+
+    def __init__(self, player, slideshowCtrl):
+        self._player = player
+        self._slideshow = slideshowCtrl
+        self._playing = False
+        self._follow = False
+
+    def isPlaying(self):
+        return self._playing
+
+    def follows(self):
+        return self._follow
+
+    def atEnd(self):
+        """stopped on the last item - a play press should start over"""
+        return not self._playing and not self._player.hasNextTrack()
+
+    def toggle(self):
+        """the one entry point for the play/pause button"""
+        if self._playing:
+            self.setPlaying(False)   # follow is kept - a paused show can resume
+        elif self._slideshow.isShowingStill():
+            # an image cannot play by itself - play means: run the show from here
+            self.setPlaying(True, follow=True)
+        else:
+            self.setPlaying(True)    # resume the video; follow stays as it was
+
+    def setPlaying(self, playing, follow=None):
+        if follow is not None:
+            self._follow = follow
+        self._playing = playing
+        self._apply()
+        self._player.syncPlayStatus.emit(self._playing)
+
+    def setInitial(self, playing, follow):
+        """intent for a stream about to load - applied once the item is on screen"""
+        self._playing = playing
+        self._follow = follow
+
+    def onItemLoaded(self):
+        """a new item is on screen. A running show keeps running; otherwise the
+        item decides: a video plays once, a still holds."""
+        if self._player.lastError:
+            self.setPlaying(False, follow=False)
+            return
+        if not (self._playing and self._follow):
+            self._follow = False   # a paused show does not sneak on via navigation
+            self._playing = not self._slideshow.isShowingStill()
+        self._apply()
+        self._player.syncPlayStatus.emit(self._playing)
+
+    def onItemEnded(self):
+        """current item finished - roll on only if we are following"""
+        if self._playing and self._follow and self._player.hasNextTrack():
+            self._player.nextTrack()
+            return
+        self.setPlaying(False, follow=False)
+
+    def _apply(self):
+        if self._slideshow.isShowingStill():
+            self._player.setPaused(True)  # mpv holds the still, the timer drives it
+            self._slideshow.setRunning(self._playing)
+        else:
+            self._slideshow.setRunning(False)
+            self._player.setPaused(not self._playing)
+
+
 class AudioDisplayController:
     def __init__(self, player, settings, fallbackImage):
         self._player = player
@@ -507,6 +723,7 @@ class MainFrame(QtWidgets.QMainWindow):
         self.playlistManager = PlaylistManager()
         self.initUI()
         self.slideshowCtrl = SlideshowController(self.player, self)
+        self.playback = PlaybackController(self.player, self.slideshowCtrl)
         self.audioDisplayCtrl = AudioDisplayController(self.player, self.settings, AUDIO_FALLBACK_IMAGE)
         self.centerWindow()
         self.show()
@@ -525,6 +742,14 @@ class MainFrame(QtWidgets.QMainWindow):
         self.shortcutPlay.activated.connect(self.playVideo)
         self.playAction.triggered.connect(self.playVideo)
         
+        self.prevAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("prev")), 'Previous picture/video (Ctrl+Left)', self)
+        self.prevAction.triggered.connect(self.player.prevTrack)
+        self.prevAction.setEnabled(False)
+
+        self.nextAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("next")), 'Next picture/video (Ctrl+Right)', self)
+        self.nextAction.triggered.connect(self.player.nextTrack)
+        self.nextAction.setEnabled(False)
+
         self.infoAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("infoAction")), 'Codec info (Crtl+I)', self)
         self.infoAction.setShortcut('Ctrl+I')
         self.infoAction.triggered.connect(self.showCodecInfo)
@@ -569,7 +794,9 @@ class MainFrame(QtWidgets.QMainWindow):
         self.toolbar = self.addToolBar('Main')
         self.toolbar.addAction(self.loadAction)
         self.toolbar.addSeparator()
+        self.toolbar.addAction(self.prevAction)
         self.toolbar.addAction(self.playAction)
+        self.toolbar.addAction(self.nextAction)
         self.toolbar.addAction(self.infoAction)
         self.toolbar.addAction(self.photoAction)
         self.toolbar.addSeparator()
@@ -673,7 +900,7 @@ class MainFrame(QtWidgets.QMainWindow):
         self.languagebox.setEnabled(isVideo)
         self.photoAction.setEnabled(isVideo)
         hasPlaylist = self.player.isPlaylist and len(self.player.mpv.playlist) > 1
-        self.playlistPanel.setNavEnabled(hasPlaylist)
+        self._setNavEnabled(hasPlaylist)
         if not hasPlaylist:
             self.ui_NowPlaying.setText("")
         if hasPlaylist:
@@ -681,6 +908,12 @@ class MainFrame(QtWidgets.QMainWindow):
                 self.playlistPanel.highlightIndex(self.player.mpv.playlist_pos)
             except Exception:
                 pass
+        path = self.player.mpv.path
+        if path and self.slideshowCtrl.isPicture(path):
+            self.player.spectrumCtrl.stopCapture()
+            self.slideshowCtrl.onTrackChanged(path)
+            self.playback.onItemLoaded()
+            return
         if isAudio:
             self.audioDisplayCtrl.update()
         else:
@@ -689,6 +922,7 @@ class MainFrame(QtWidgets.QMainWindow):
             self._updateLang(streamData)
             if self.settings.hasSubtitles():
                 self._onSubtitleChanged(True)
+        self.playback.onItemLoaded()
 
 
     def _updateLang(self, streamData):
@@ -775,7 +1009,8 @@ class MainFrame(QtWidgets.QMainWindow):
     
     def loadFile(self):
         fileFilter = (
-            f"Media & Playlists ({self.playlistManager.formatExts(MEDIA_EXTENSIONS | PLAYLIST_EXTENSIONS)})"
+            f"Media & Playlists ({self.playlistManager.formatExts(MEDIA_EXTENSIONS | PICTURE_EXTENSIONS | PLAYLIST_EXTENSIONS)})"
+            f";;Audio & Video ({self.playlistManager.formatExts(MEDIA_EXTENSIONS)})"
             f";;Pictures ({self.playlistManager.formatExts(PICTURE_EXTENSIONS)})"
             f";;Playlists ({self.playlistManager.formatExts(PLAYLIST_EXTENSIONS)})"
             f";;All files (*)"
@@ -791,15 +1026,8 @@ class MainFrame(QtWidgets.QMainWindow):
         if not fn:
             return
         self.ui_NowPlaying.setText("")
-        self.playlistPanel.setNavEnabled(False)
-        ext = FFMPEGTools.OSTools().getExtension(fn).lower()
+        self._setNavEnabled(False)
         self.playlistManager.setLastDir(fn)
-        if ext in PICTURE_EXTENSIONS:
-            self.updateWindowTitle(fn)
-            self.ui_NowPlaying.setText(OSTools().getFileNameOnly(fn))
-            self.playlistPanel.setTracks([], "")
-            self.player.showImage(fn)
-            return
         self.player.hideImage()
         try:
             self.player.setStreamData(fn)
@@ -807,27 +1035,66 @@ class MainFrame(QtWidgets.QMainWindow):
             if self.player.isPlaylist:
                 entries = self.playlistManager.parse(fn)
                 name = OSTools().getPathWithoutExtension(OSTools().getFileNameOnly(fn))
-                self.playlistPanel.setTracks(entries, name, sourcePath=fn)
+                self.playlistPanel.setTracks(entries, name, sourcePath=fn,
+                                             rootDir=OSTools().getDirectory(fn))
                 self._panelDirty = False
+                self.playback.setInitial(playing=True, follow=True)
                 if not self.playlistPanel.isVisible():
                     self.playlistPanelAction.setChecked(True)
-            else:
-                self.playlistPanel.setTracks([], "")
-                self._panelDirty = False
-            self.asyncPlay()
+                self.asyncPlay()
+                return
+            self._playFolderOf(fn)
+            return
         except:
             self._showIdleIcon()
             self.getErrorDialog("Invalid file", "%s is not a known media file" % (fn), "-").show()
     
+    def _playFolderOf(self, fn):
+        """Opened from the file manager: show this one file, but queue its whole
+        folder tree so next/prev work. Nothing advances until play is pressed."""
+        paths = self.playlistManager.scanTree(fn)
+        if fn not in paths:
+            paths = [fn]
+        idx = paths.index(fn)
+        root = OSTools().getDirectory(fn)
+        name = OSTools().getFileNameOnly(root)
+        self.playlistPanel.setTracks(paths, name, sourcePath=None, rootDir=root)
+        self._panelDirty = False
+        self.player.isPlaylist = True
+        # browse mode: once loaded, the item decides - a video plays once, a still holds
+        self.playback.setInitial(playing=False, follow=False)
+        self.asyncPlay(lambda: self.player.startPlayingList(paths, idx))
+
+    def _setNavEnabled(self, enabled):
+        """next/prev live in the toolbar and in the playlist panel - keep them in sync"""
+        self.prevAction.setEnabled(enabled)
+        self.nextAction.setEnabled(enabled)
+        self.playlistPanel.setNavEnabled(enabled)
+
     def __encodeQString(self, stringTuple):
         text = stringTuple[0]
         return text
-    
+
     def playVideo(self):
-        if self.slideshowCtrl.isActive():
-            self.slideshowCtrl.togglePlay()
-        else:
-            QtCore.QTimer.singleShot(0, self.player.toggleVideoPlay)
+        if self._isIdleWithPanelTracks():
+            self._onPlaylistPlay(self.playlistPanel.currentIndex(), run=True)
+            return
+        if self.playback.atEnd() and len(self.playlistPanel.getPaths()) > 1:
+            self._onPlaylistPlay(0, run=True)
+            return
+        if not self.playback.isPlaying() and self.player.isEOF() \
+                and self.player.hasNextTrack():
+            # the current video ran out - play means: run on from the next one
+            self.playback.setInitial(playing=True, follow=True)
+            self.player.nextTrack()
+            return
+        self.playback.toggle()
+
+    def _isIdleWithPanelTracks(self):
+        """play pressed after tracks were added but never started"""
+        if not self.player.mpv or not self.playlistPanel.getPaths():
+            return False
+        return not self.player.mpv.path
 
     def _onSyncPlayerControls(self, isPlaying):
         if isPlaying:
@@ -892,12 +1159,15 @@ class MainFrame(QtWidgets.QMainWindow):
         self.player.fileLoaded.connect(lambda: self._prepareNextStream(self.player.streamData))
         self.player.triggerUpdate.connect(self._onSyncSlider)
         self.player.playlistTrackChanged.connect(self.ui_NowPlaying.setText)
+        self.player.playlistTrackChanged.connect(self._onTitleChanged)
         self.player.playlistTrackChanged.connect(lambda _: self.playlistPanel.highlightIndex(self.player.mpv.playlist_pos))
         self.player.playlistTrackChanged.connect(self._onTrackChanged)
         self.settings.changeEQ.connect(self._onEQChanged)
         self.settings.changeSub.connect(self._onSubtitleChanged)
         self.settings.changeSpectrum.connect(self._onSpectrumModeChanged)
         self.settings.changeSlideDuration.connect(self.slideshowCtrl.onSlideDurationChanged)
+        self.slideshowCtrl.slideEnded.connect(self.playback.onItemEnded)
+        self.player.itemEnded.connect(self.playback.onItemEnded)
         self.player.spectrumCtrl.setMode(self.settings.getSpectrumMode())
         self.playlistPanel.requestPlay.connect(self._onPlaylistPlay)
         self.playlistPanel.requestPrev.connect(self.player.prevTrack)
@@ -908,12 +1178,20 @@ class MainFrame(QtWidgets.QMainWindow):
         self.player.syncPlayStatus.connect(self.playlistPanel.setPlaying)
         QtCore.QTimer.singleShot(10, lambda: self._switchStream(self.player.filePath))
 
-    def _onPlaylistPlay(self, idx):
+    def _onPlaylistPlay(self, idx, run=False):
+        """Double-click (run=False) is navigation: jump there and let the item
+        decide - a video plays once, a still holds, a running show keeps
+        running. run=True (the play button) runs the list from idx."""
         paths = self.playlistPanel.getPaths()
         if not paths:
             return
+        if run:
+            self.playback.setInitial(playing=True, follow=True)
         if not self._panelDirty and self.player.isPlaylist:
+            alreadyThere = self.player.mpv.playlist_pos == idx
             self.player.jumpToTrack(idx)
+            if alreadyThere:
+                self.playback.onItemLoaded()  # no track event will fire - apply now
         else:
             self._panelDirty = False
             self.player.isPlaylist = True
@@ -922,7 +1200,7 @@ class MainFrame(QtWidgets.QMainWindow):
 
     def _onPlaylistNew(self):
         self._panelDirty = True
-        self.playlistPanel.setNavEnabled(False)
+        self._setNavEnabled(False)
 
     def _onTrackChanged(self, _title):
         path = self.player.mpv.path
@@ -930,10 +1208,12 @@ class MainFrame(QtWidgets.QMainWindow):
             return
         if self.playlistThread is not None:
             return
-        if not self.slideshowCtrl.onTrackChanged(path):
-            if path == getattr(self.player, '_probedPath', None):
-                return
-            self.asyncPlay(self.player._probeCurrentTrack)
+        if self.slideshowCtrl.onTrackChanged(path):
+            self.playback.onItemLoaded()  # keep playing / keep paused - never flip
+            return
+        if path == getattr(self.player, '_probedPath', None):
+            return
+        self.asyncPlay(self.player._probeCurrentTrack)
 
     def asyncPlay(self, func=None):
         self.playlistThread = Worker(func or self.player.startPlaying)
@@ -1063,8 +1343,19 @@ class MainFrame(QtWidgets.QMainWindow):
         return dlg
 
     def updateWindowTitle(self, fnName):
-        tx = FFMPEGTools.OSTools().getFileNameOnly(fnName)
-        self.setWindowTitle(AppName + " - " + tx)
+        self.setWindowLabel(FFMPEGTools.OSTools().getFileNameOnly(fnName))
+
+    def setWindowLabel(self, text):
+        self.setWindowTitle(AppName + " - " + text)
+
+    def _onTitleChanged(self, title):
+        """Follow the media title - it falls back to the file name when a track
+        carries no metadata. Streams are skipped: their ICY updates would rewrite
+        the title on every song. Those still reach ui_NowPlaying."""
+        path = self.player.mpv.path
+        if not path or '://' in path or not title:
+            return
+        self.setWindowLabel(title)
 
     def closeEvent(self, __event: QCloseEvent) -> None:
         self.player.closePending = True

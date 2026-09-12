@@ -8,7 +8,7 @@ def version    = gradle.ext.version
 def pkgrelease = gradle.ext.pkgrelease
 def distros    = gradle.ext.distros
 
-// All output goes to dist/ — templates in build/ are never touched by "clean"
+// All output goes to dist/ - templates in build/ are never touched by "clean"
 def outDir = file("dist")
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ def tok(Map m) { m.collectEntries { k, v -> [k.toString(), v.toString()] } }
 
 def stageDir = { String sub -> file("${outDir}/stage/${sub}") }
 
-// "pkg-a, pkg-b" → "'pkg-a' 'pkg-b'"  (PKGBUILD array format)
+// "pkg-a, pkg-b" -> "'pkg-a' 'pkg-b'"  (PKGBUILD array format)
 def archPkgFmt = { String s -> s.split(',').collect { "'${it.trim()}'" }.join(' ') }
 
 // Copy *.py sources + icons + lib/mpv.py into a staging directory
@@ -158,7 +158,7 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
             def timestamp = ZonedDateTime.now(ZoneOffset.UTC)
                 .format(DateTimeFormatter.ofPattern("EEE, d MMM yyyy HH:mm:ss", Locale.ENGLISH))
 
-            // copyright is copied unfiltered — @ in email addresses would be
+            // copyright is copied unfiltered, @ in email addresses would be
             // misinterpreted as ReplaceTokens delimiters
             copy {
                 from "build/DEB-template/debian"
@@ -180,7 +180,7 @@ distros.findAll { _name, cfg -> cfg.type == "ubuntu" }.each { _name, cfg ->
 
             def tarFile = file("${debOut}/${buildName}.tar")
             makeTar(tarFile, buildName, ubuStage)
-            println "  → ${tarFile.name}"
+            println "  -> ${tarFile.name}"
 
             delete ubuStage
         }
@@ -201,7 +201,7 @@ tasks.register("build_pypi") {
 
         stageSources(pkgDir)
 
-        // Patch absolute lib import → relative so the installed package resolves it
+        // Patch absolute lib import to relative so the installed package resolves it
         def epFile = file("${pkgDir}/EasyPlayer.py")
         epFile.text = epFile.text.replace("from lib.mpv import", "from .lib.mpv import")
 
@@ -215,7 +215,7 @@ tasks.register("build_pypi") {
             filter(ReplaceTokens, tokens: tok([xxx: version]))
         }
 
-        // README for PyPI — fix screenshot URLs and drop the GitHub release download badge
+        // README for PyPI: fix screenshot URLs and drop the GitHub release download badge
         copy {
             from "README.md"
             into pypiOut

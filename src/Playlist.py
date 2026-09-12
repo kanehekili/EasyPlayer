@@ -1,5 +1,7 @@
 from PyQt6 import QtWidgets, QtGui
 from PyQt6.QtCore import pyqtSignal
+import re
+import xml.etree.ElementTree as ET
 import FFMPEGTools
 from FFMPEGTools import OSTools
 from Slideshow import PICTURE_EXTENSIONS
@@ -9,6 +11,7 @@ Log = FFMPEGTools.Log
 PLAYLIST_EXTENSIONS = {'.m3u', '.m3u8', '.pls', '.xspf'}
 MEDIA_EXTENSIONS = {
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.ts', '.m2t',
+    '.mts', '.m2ts',
     '.mp3', '.flac', '.ogg', '.wav', '.aac', '.m4a', '.opus', '.wma',
     '.m4v', '.mpg', '.mpeg', '.vob', '.3gp', '.rm', '.rmvb',
 }
@@ -49,9 +52,70 @@ def _setLastDir(path):
             pass
 
 
+def _scanTree(startFile):
+    """Every picture/video in the start file's directory tree, sorted."""
+    ostools = OSTools()
+    root = ostools.getDirectory(startFile)
+    if not root or not ostools.isDirectory(root):
+        return []
+    return ostools.collectFiles(root, MEDIA_EXTENSIONS | PICTURE_EXTENSIONS)
+
+
 def _formatExts(exts):
     parts = sorted(exts)
     return ' '.join('*' + e for e in parts) + ' ' + ' '.join('*' + e.upper() for e in parts)
+
+
+class PlaylistParser:
+    """m3u/m3u8, pls and xspf - playlist formats are EasyPlayer's domain, not
+    an OS service, so this does not belong in OSTools."""
+
+    def parse(self, path):
+        """Parse playlist file and return list of absolute paths/URLs."""
+        ostools = OSTools()
+        base = ostools.getDirectory(ostools.absolutePath(path))
+        ext = ostools.getExtension(path).lower()
+        entries = []
+
+        def resolve(p):
+            p = p.strip()
+            if not p:
+                return None
+            if '://' in p:
+                return p
+            if not ostools.isAbsolute(p):
+                p = ostools.joinPathes(base, p)
+            return p
+
+        try:
+            if ext in ('.m3u', '.m3u8'):
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            r = resolve(line)
+                            if r:
+                                entries.append(r)
+            elif ext == '.pls':
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        m = re.match(r'File\d+=(.+)', line.strip(), re.IGNORECASE)
+                        if m:
+                            r = resolve(m.group(1))
+                            if r:
+                                entries.append(r)
+            elif ext == '.xspf':
+                ns = {'x': 'http://xspf.org/ns/0/'}
+                for loc in ET.parse(path).findall('.//x:location', ns):
+                    if loc.text:
+                        r = resolve(loc.text)
+                        if r:
+                            entries.append(r)
+        except (OSError, ET.ParseError):
+            # unreadable or malformed playlist - expected. Anything else is a
+            # bug and must not be swallowed.
+            Log.info("Cannot read playlist %s", path)
+        return entries
 
 
 class PlaylistManager:
@@ -59,7 +123,7 @@ class PlaylistManager:
         self._ostools = OSTools()
 
     def parse(self, path):
-        return self._ostools.parsePlaylist(path)
+        return PlaylistParser().parse(path)
 
     def getLastDir(self):
         return _getLastDir()
@@ -69,6 +133,9 @@ class PlaylistManager:
 
     def formatExts(self, exts):
         return _formatExts(exts)
+
+    def scanTree(self, startFile):
+        return _scanTree(startFile)
 
 
 class PlaylistListWidget(QtWidgets.QListWidget):
@@ -117,6 +184,7 @@ class PlaylistPanel(QtWidgets.QFrame):
         super().__init__(parent)
         self._paths = []
         self._sourcePath = sourcePath
+        self._rootDir = None
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         self.setFixedWidth(230)
         self._initUI()
@@ -173,8 +241,9 @@ class PlaylistPanel(QtWidgets.QFrame):
 
     # ---- public API ----
 
-    def setTracks(self, paths, name="", sourcePath=None):
+    def setTracks(self, paths, name="", sourcePath=None, rootDir=None):
         self._paths = list(paths)
+        self._rootDir = rootDir
         if sourcePath is not None:
             self._sourcePath = sourcePath
         self.nameEdit.setText(name)
@@ -214,10 +283,17 @@ class PlaylistPanel(QtWidgets.QFrame):
     def getName(self):
         return self.nameEdit.text().strip()
 
+    def currentIndex(self):
+        return max(0, self.trackList.currentRow())
+
     # ---- private ----
 
     def _addItem(self, path):
-        item = QtWidgets.QListWidgetItem(OSTools().getFileNameOnly(path))
+        """subfolder entries show their path relative to the list's root, so
+        they read as subfolder content instead of oddly sorted siblings"""
+        label = (OSTools().relativePath(path, self._rootDir)
+                 or OSTools().getFileNameOnly(path))
+        item = QtWidgets.QListWidgetItem(label)
         item.setToolTip(path)
         self.trackList.addItem(item)
 
@@ -237,6 +313,7 @@ class PlaylistPanel(QtWidgets.QFrame):
     def _onNew(self):
         self._paths = []
         self._sourcePath = None
+        self._rootDir = None
         self.nameEdit.setText("")
         self.trackList.clear()
         self.requestNew.emit()
