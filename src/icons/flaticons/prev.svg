@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" version="1.1" viewBox="0 0 256 256">
+  <!-- flat prev: double chevron sized to match play.svg/pause.svg.
+       Gap is 22 units (~2px at 24px) so the two chevrons stay
+       distinct without outlines to separate them. -->
+  <g fill="#000000">
+    <path d="M 217 35 L 139 128 L 217 221 Z"/>
+    <path d="M 117 35 L 39 128 L 117 221 Z"/>
+  </g>
+</svg>

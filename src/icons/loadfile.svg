@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- EasyPlayer icon: load a media file. A document sitting in an open
+     folder. Light from above; gradients only, no filters or clip paths
+     (QtSvg implements SVG Tiny 1.2).
+     The folder outline is the project's own flaticons/open.svg geometry,
+     scaled and translated only. Rotating it would turn the gradients with
+     it and tilt the light off vertical. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+
+  <defs>
+    <linearGradient id="paper" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="6.00" x2="0" y2="170.00">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.1" stop-color="#f2f4f5"/>
+      <stop offset="0.46" stop-color="#dee2e6"/>
+      <stop offset="0.5" stop-color="#d9dde2"/>
+      <stop offset="0.8" stop-color="#c6cdd4"/>
+      <stop offset="1" stop-color="#bcc4cc"/>
+    </linearGradient>
+
+    <linearGradient id="back" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="77.00" x2="0" y2="252.00">
+      <stop offset="0" stop-color="#ffd98a"/>
+      <stop offset="0.1" stop-color="#ecc271"/>
+      <stop offset="0.46" stop-color="#ce9d48"/>
+      <stop offset="0.5" stop-color="#c6933d"/>
+      <stop offset="0.8" stop-color="#aa7017"/>
+      <stop offset="1" stop-color="#9a5c02"/>
+    </linearGradient>
+
+    <linearGradient id="front" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="130.00" x2="0" y2="252.00">
+      <stop offset="0" stop-color="#ffc94f"/>
+      <stop offset="0.1" stop-color="#f0b741"/>
+      <stop offset="0.46" stop-color="#d99b2a"/>
+      <stop offset="0.5" stop-color="#d29323"/>
+      <stop offset="0.8" stop-color="#bc790e"/>
+      <stop offset="1" stop-color="#b06a02"/>
+    </linearGradient>
+
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="130.00" x2="0" y2="200.00">
+      <stop offset="0"   stop-color="#ffffff" stop-opacity="0.45"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="1"   stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- back panel, then the sheet, then the front flap: the sheet ends up
+       inside the folder's pocket rather than behind the whole folder -->
+  <g transform="translate(11.45,40.35) scale(0.95)">
+    <path d="m13.994 38.637v179.37h216.01v-179.37h-139.01l-8.8615-6.6433h-34.287l-8.8539 6.6433z" fill="url(#back)" stroke="#5d3601" stroke-width="9.99"
+          stroke-linejoin="round"/>
+  </g>
+
+  <path d="M 72 6 L 160 6 L 188 34 L 188 170 L 72 170 Z" fill="url(#paper)" stroke="#55606a" stroke-width="7"
+        stroke-linejoin="round"/>
+  <path d="M 160 6 L 160 34 L 188 34 Z" fill="#c4ccd3" stroke="#55606a" stroke-width="7"
+        stroke-linejoin="round"/>
+  <g stroke="#8e98a1" stroke-width="8" stroke-linecap="round">
+    <path d="M 88 52 H 170"/>
+    <path d="M 88 74 H 148"/>
+    <path d="M 88 96 H 162"/>
+  </g>
+
+  <g transform="translate(11.45,40.35) scale(0.95)">
+    <path d="m13.994 218.01 15.035-121.62h124.27l8.979-5.9326h46.879l8.3803 5.9326h32.004l-19.045 121.62h-216.51" fill="url(#front)" stroke="#5d3601" stroke-width="9.45"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m13.994 218.01 15.035-121.62h124.27l8.979-5.9326h46.879l8.3803 5.9326h32.004l-19.045 121.62h-216.51" fill="url(#sheen)"/>
+  </g>
+
+</svg>

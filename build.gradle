@@ -13,8 +13,8 @@ def outDir = file("dist")
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-def computeMD5(File f) {
-    def md = MessageDigest.getInstance("MD5")
+def computeSHA256(File f) {
+    def md = MessageDigest.getInstance("SHA-256")
     f.eachByte(65536) { bytes, len -> md.update(bytes, 0, len) }
     md.digest().encodeHex().toString()
 }
@@ -39,13 +39,19 @@ def stageSources = { File dst ->
     copy { from "src/lib/mpv.py" into "${dst}/lib"   }
 }
 
-// Create an uncompressed tar; arcName becomes the single root directory inside
+// Create an uncompressed tar; arcName becomes the single root directory inside.
+// ant.tar ignores on-disk permissions and stamps 644 - install scripts and
+// debian/rules must be executable, so they get their own fileset.
 def makeTar = { File tarFile, String arcName, File sourceDir ->
-    ant.tar(destfile: tarFile, basedir: sourceDir.parent, includes: "${arcName}/**")
+    def execFiles = "${arcName}/*.sh,${arcName}/debian/rules"
+    ant.tar(destfile: tarFile) {
+        tarfileset(dir: sourceDir.parent, includes: "${arcName}/**", excludes: execFiles)
+        tarfileset(dir: sourceDir.parent, includes: execFiles, filemode: "755")
+    }
 }
 
 // Generate .SRCINFO content from PKGBUILD data (no makepkg required)
-def makeSrcInfo = { String pkgver, String pkgrel, String md5, String libs, String optLibs ->
+def makeSrcInfo = { String pkgver, String pkgrel, String sha256, String libs, String optLibs ->
     def depLines = libs.split(',').collect { "\tdepends = ${it.trim()}" }.join("\n") + "\n" +
                    optLibs.split(',').collect { "\toptdepends = ${it.trim()}" }.join("\n")
 """\
@@ -59,7 +65,7 @@ pkgbase = easyplayer
 \tlicense = GPL-2.0-or-later
 ${depLines}
 \tsource = https://github.com/kanehekili/EasyPlayer/releases/download/${pkgver}/easyplayer${pkgver}.tar
-\tmd5sums = ${md5}
+\tsha256sums = ${sha256}
 
 pkgname = easyplayer
 """
@@ -110,12 +116,19 @@ tasks.register("build_aur") {
         stageSources(stage)
         copy { from "build/EasyPlayer.desktop" into stage }
 
+        // Fallback path for users on neither Arch nor Debian - the PKGBUILD
+        // installs explicit globs, so the scripts are inert for AUR builds
+        copy {
+            from("build") { include "*install*.sh" }
+            into stage
+        }
+
         // Source tarball (uploaded to GitHub Releases alongside the PKGBUILD)
         def tarFile = file("${outDir}/easyplayer${version}.tar")
         makeTar(tarFile, "easyplayer", stage)
 
-        def md5 = computeMD5(tarFile)
-        println "  AUR source tarball : ${tarFile.name}  md5=${md5}"
+        def sha256 = computeSHA256(tarFile)
+        println "  AUR source tarball : ${tarFile.name}  sha256=${sha256}"
 
         def archCfg = distros['arch']
         copy {
@@ -124,13 +137,13 @@ tasks.register("build_aur") {
             filter(ReplaceTokens, tokens: tok([
                 xxx      : version,
                 xpkgrelx : pkgrelease,
-                md5sum   : md5,
+                sha256sum: sha256,
                 xlibsx   : archPkgFmt(archCfg.libs),
                 xoptlibsx: archPkgFmt(archCfg.optLibs),
             ]))
         }
 
-        file("${aurOut}/.SRCINFO").text = makeSrcInfo(version, pkgrelease, md5, archCfg.libs, archCfg.optLibs)
+        file("${aurOut}/.SRCINFO").text = makeSrcInfo(version, pkgrelease, sha256, archCfg.libs, archCfg.optLibs)
         println "  .SRCINFO generated"
 
         delete stage
@@ -233,6 +246,36 @@ tasks.register("build_pypi") {
     }
 }
 
+tasks.register("upload_pypi") {
+    description = "Stage, build and upload the PyPI package (credentials from ~/.pypirc)"
+    group       = "packaging"
+    dependsOn   "build_pypi"
+
+    doLast {
+        def pypiOut = file("${outDir}/pypi")
+
+        // artifacts of previous versions would be uploaded too - twine takes dist/* as-is
+        delete file("${pypiOut}/dist")
+
+        // inheritIO() would write to the gradle daemon's streams, not the console
+        def run = { List<String> cmd ->
+            def proc = new ProcessBuilder(cmd).directory(pypiOut).redirectErrorStream(true).start()
+            proc.inputStream.eachLine { println "  $it" }
+            def rc = proc.waitFor()
+            if (rc != 0) throw new GradleException("${cmd.first()} failed with exit code ${rc}")
+        }
+
+        run(["python3", "-m", "build"])
+
+        // ProcessBuilder does not expand globs - pass the built files explicitly
+        def artifacts = fileTree("${pypiOut}/dist").files*.path.sort()
+        run(["twine", "check", "--strict"] + artifacts)
+        run(["twine", "upload"] + artifacts)
+
+        println "  Done: https://pypi.org/project/easympv/${version}/"
+    }
+}
+
 // ── aggregate ─────────────────────────────────────────────────────────────────
 
 tasks.register("clean") {
@@ -241,9 +284,14 @@ tasks.register("clean") {
     doLast { delete outDir }
 }
 
+// "clean" wipes dist/ - so whenever it is part of the build, it runs first
+tasks.matching { t -> t.name.startsWith("build_") || t.name in ["update_readme", "updateMPV"] }
+     .configureEach { mustRunAfter "clean" }
+
 tasks.register("build_all") {
     description = "Build all packages: PyPI, AUR, DEB x${distros.count { it.value.type == 'ubuntu' }}"
     group       = "packaging"
+    dependsOn "clean"
     dependsOn "updateMPV"
     dependsOn "update_readme"
     dependsOn tasks.matching { t -> t.name.startsWith("build_") && t.name != "build_all" }

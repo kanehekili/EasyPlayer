@@ -1,7 +1,7 @@
 # EasyPlayer
-Version 1.5.0
+Version 1.6.0
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.5.0/easyplayer1.5.0.tar)
+![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.6.0/easyplayer1.6.0.tar)
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
@@ -119,6 +119,9 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
 ### Changes 
+06.10.2026
+* On-screen controls in fullscreen (an auto-hiding overlay holding prev/play/stop/next, the slider and the info row), a new Stop action that holds the current frame and leaves fullscreen, pictures now honour their EXIF orientation tag, ffmpeg is located via PATH instead of a hardcoded /usr/bin, a redesigned icon set across all three themes, and the project is now GPL-2.0-or-later throughout
+
 10.09.2026
 * Zoom for videos and pictures via Ctrl + mouse wheel, pan the zoomed image with the left mouse button
 * Opening a file queues its whole folder tree - next/prev step through it, play runs it as a slideshow

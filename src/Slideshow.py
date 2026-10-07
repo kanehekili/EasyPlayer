@@ -1,3 +1,15 @@
+# copyright (c) 2026 kanehekili (kanehekili.media@gmail.com)
+# This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License,
+# as published by the Free Software Foundation, either version 2 of the License, or (at your option) any
+# later version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the  GNU General Public License for more
+# details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, see <https://www.gnu.org/licenses/>.
+
 from PyQt6 import QtWidgets, QtCore, QtGui
 import FFMPEGTools
 from FFMPEGTools import OSTools, FFmpegPicture
@@ -24,13 +36,15 @@ class ImageOverlay(QtWidgets.QWidget):
 
     def _load(self, path):
         """Qt first; anything it has no plugin for goes through ffmpeg"""
-        pixmap = QtGui.QPixmap(path)
-        if not pixmap.isNull():
-            return pixmap
+        reader = QtGui.QImageReader(path)
+        reader.setAutoTransform(True)  # honour the EXIF orientation tag
+        image = reader.read()
+        if not image.isNull():
+            return QtGui.QPixmap.fromImage(image)
         raw = FFmpegPicture.decodeStill(path)
         if not raw:
             Log.info("no decoder for %s", path)
-            return pixmap
+            return QtGui.QPixmap()
         decoded = QtGui.QPixmap()
         decoded.loadFromData(raw, "PNG")
         return decoded

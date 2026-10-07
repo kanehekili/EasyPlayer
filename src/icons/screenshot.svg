@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Screenshot icon for EasyPlayer: round camera aperture.
+     SVG Tiny 1.2 safe: gradients only, no filters (QtSvg ignores <filter>).
+     Full-bleed like the neighbouring PNGs, so there is no room for a cast
+     shadow; depth comes from the rim-to-core gradients and the sheen. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+
+  <defs>
+    <linearGradient id="b0" gradientUnits="userSpaceOnUse" x1="47.20" y1="5.67" x2="38.03" y2="21.56">
+      <stop offset="0" stop-color="#ff3b2f"/>
+      <stop offset="0.42" stop-color="#e2100a"/>
+      <stop offset="1" stop-color="#6e0400"/>
+    </linearGradient>
+    <linearGradient id="b1" gradientUnits="userSpaceOnUse" x1="62.40" y1="32.00" x2="44.05" y2="32.00">
+      <stop offset="0" stop-color="#ff9f1a"/>
+      <stop offset="0.42" stop-color="#f07000"/>
+      <stop offset="1" stop-color="#813000"/>
+    </linearGradient>
+    <linearGradient id="b2" gradientUnits="userSpaceOnUse" x1="47.20" y1="58.33" x2="38.03" y2="42.44">
+      <stop offset="0" stop-color="#ffd91f"/>
+      <stop offset="0.42" stop-color="#eeae00"/>
+      <stop offset="1" stop-color="#7d5300"/>
+    </linearGradient>
+    <linearGradient id="b3" gradientUnits="userSpaceOnUse" x1="16.80" y1="58.33" x2="25.98" y2="42.44">
+      <stop offset="0" stop-color="#6ee02a"/>
+      <stop offset="0.42" stop-color="#31ab00"/>
+      <stop offset="1" stop-color="#115a00"/>
+    </linearGradient>
+    <linearGradient id="b4" gradientUnits="userSpaceOnUse" x1="1.60" y1="32.00" x2="19.95" y2="32.00">
+      <stop offset="0" stop-color="#35a8ff"/>
+      <stop offset="0.42" stop-color="#0b6fd8"/>
+      <stop offset="1" stop-color="#05336e"/>
+    </linearGradient>
+    <linearGradient id="b5" gradientUnits="userSpaceOnUse" x1="16.80" y1="5.67" x2="25.97" y2="21.56">
+      <stop offset="0" stop-color="#b85cff"/>
+      <stop offset="0.42" stop-color="#861ade"/>
+      <stop offset="1" stop-color="#3f0272"/>
+    </linearGradient>
+
+    <radialGradient id="glass" gradientUnits="userSpaceOnUse"
+                    cx="27.40" cy="27.40" r="17.2">
+      <stop offset="0"    stop-color="#eaf7ff"/>
+      <stop offset="0.40" stop-color="#6bb8ee"/>
+      <stop offset="1"    stop-color="#0d3a68"/>
+    </radialGradient>
+
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1"    stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+  </defs>
+
+    <path d="M 32.00 1.60 A 30.40 30.40 0 0 1 58.33 16.80 L 42.44 25.98 L 32.00 19.95 Z" fill="url(#b0)"/>
+    <path d="M 58.33 16.80 A 30.40 30.40 0 0 1 58.33 47.20 L 42.44 38.02 L 42.44 25.98 Z" fill="url(#b1)"/>
+    <path d="M 58.33 47.20 A 30.40 30.40 0 0 1 32.00 62.40 L 32.00 44.05 L 42.44 38.02 Z" fill="url(#b2)"/>
+    <path d="M 32.00 62.40 A 30.40 30.40 0 0 1 5.67 47.20 L 21.56 38.02 L 32.00 44.05 Z" fill="url(#b3)"/>
+    <path d="M 5.67 47.20 A 30.40 30.40 0 0 1 5.67 16.80 L 21.56 25.97 L 21.56 38.02 Z" fill="url(#b4)"/>
+    <path d="M 5.67 16.80 A 30.40 30.40 0 0 1 32.00 1.60 L 32.00 19.95 L 21.56 25.97 Z" fill="url(#b5)"/>
+
+  <!-- blade seams and rim -->
+  <g fill="none" stroke="#2b1f1f" stroke-opacity="0.50" stroke-width="0.9"
+     stroke-linecap="round">
+    <path d="M 32.00 19.95 L 32.00 1.60"/>
+    <path d="M 42.44 25.98 L 58.33 16.80"/>
+    <path d="M 42.44 38.02 L 58.33 47.20"/>
+    <path d="M 32.00 44.05 L 32.00 62.40"/>
+    <path d="M 21.56 38.02 L 5.67 47.20"/>
+    <path d="M 21.56 25.97 L 5.67 16.80"/>
+  </g>
+  <circle cx="32.00" cy="32.00" r="30.40" fill="none"
+          stroke="#1e1616" stroke-opacity="0.80" stroke-width="1.3"/>
+
+  <!-- restrained top light: enough to round the body, not enough to bleach it -->
+  <circle cx="32.00" cy="32.00" r="30.40" fill="url(#sheen)"/>
+
+  <!-- glass opening -->
+  <path d="M 32.00 19.95 L 42.44 25.98 L 42.44 38.02 L 32.00 44.05 L 21.56 38.02 L 21.56 25.97 Z" fill="url(#glass)" stroke="#0b2f55"
+        stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M 24.90 26.00 L 33.10 23.50 L 37.00 26.70 L 28.60 30.40 Z" fill="#ffffff" opacity="0.70"/>
+
+</svg>

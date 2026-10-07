@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Remove/close cross for EasyPlayer.
+     Light falls from above; the 45-degree rotation is baked into the vertex
+     coordinates so the gradients stay vertical in user space. Applying it as a
+     <g transform> instead would rotate the gradients too and tilt the light.
+     SVG Tiny 1.2 safe: gradients only, no filters, no clip paths. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+
+  <defs>
+    <linearGradient id="body" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="4.78" x2="0" y2="59.22">
+      <stop offset="0"    stop-color="#ff9184"/>
+      <stop offset="0.10" stop-color="#f9503f"/>
+      <stop offset="0.46" stop-color="#e01b10"/>
+      <stop offset="0.50" stop-color="#d1140a"/>
+      <stop offset="0.80" stop-color="#9c0a04"/>
+      <stop offset="1"    stop-color="#6b0502"/>
+    </linearGradient>
+
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="4.78" x2="0" y2="32.00">
+      <stop offset="0"   stop-color="#ffffff" stop-opacity="0.50"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1"   stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M 45.79 4.78 L 59.22 18.21 L 45.44 32.00 L 59.22 45.79 L 45.79 59.22 L 32.00 45.44 L 18.21 59.22 L 4.78 45.79 L 18.56 32.00 L 4.78 18.21 L 18.21 4.78 L 32.00 18.56 Z" fill="#000000" opacity="0.22" transform="translate(0.8,1.6)"/>
+  <path d="M 45.79 4.78 L 59.22 18.21 L 45.44 32.00 L 59.22 45.79 L 45.79 59.22 L 32.00 45.44 L 18.21 59.22 L 4.78 45.79 L 18.56 32.00 L 4.78 18.21 L 18.21 4.78 L 32.00 18.56 Z" fill="url(#body)" stroke="#000000" stroke-width="3.2" stroke-linejoin="round"/>
+  <path d="M 45.79 4.78 L 59.22 18.21 L 45.44 32.00 L 59.22 45.79 L 45.79 59.22 L 32.00 45.44 L 18.21 59.22 L 4.78 45.79 L 18.56 32.00 L 4.78 18.21 L 18.21 4.78 L 32.00 18.56 Z" fill="url(#sheen)"/>
+
+</svg>

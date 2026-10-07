@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- EasyPlayer icon. Light from above; gradients only, no filters
+     or clip paths (QtSvg implements SVG Tiny 1.2).
+     Body, shutter and label each get their own ramp so the parts separate
+     without depending on the outlines alone. The green arrow is what makes
+     the glyph read as "save as" rather than plain "save". -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+
+  <defs>
+    <linearGradient id="body" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="5.00" x2="0" y2="59.00">
+      <stop offset="0" stop-color="#8fb6d8"/>
+      <stop offset="0.1" stop-color="#7aa0c2"/>
+      <stop offset="0.46" stop-color="#587c9d"/>
+      <stop offset="0.5" stop-color="#4f7393"/>
+      <stop offset="0.8" stop-color="#2f5271"/>
+      <stop offset="1" stop-color="#1d3f5e"/>
+    </linearGradient>
+
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="5.00" x2="0" y2="32.00">
+      <stop offset="0"   stop-color="#ffffff" stop-opacity="0.50"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1"   stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="shut" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="5.00" x2="0" y2="27.00">
+      <stop offset="0" stop-color="#f4f7fa"/>
+      <stop offset="0.1" stop-color="#e1e6ea"/>
+      <stop offset="0.46" stop-color="#c3cad1"/>
+      <stop offset="0.5" stop-color="#bac2ca"/>
+      <stop offset="0.8" stop-color="#9ea8b3"/>
+      <stop offset="1" stop-color="#8e9aa6"/>
+    </linearGradient>
+
+    <linearGradient id="labl" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="35.00" x2="0" y2="59.00">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.1" stop-color="#f2f4f5"/>
+      <stop offset="0.46" stop-color="#dde1e6"/>
+      <stop offset="0.5" stop-color="#d7dce1"/>
+      <stop offset="0.8" stop-color="#c4cbd3"/>
+      <stop offset="1" stop-color="#b9c2cb"/>
+    </linearGradient>
+
+    <linearGradient id="arrw" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="29.00" x2="0" y2="57.00">
+      <stop offset="0" stop-color="#bdf07a"/>
+      <stop offset="0.1" stop-color="#9fd365"/>
+      <stop offset="0.46" stop-color="#6da544"/>
+      <stop offset="0.5" stop-color="#60983b"/>
+      <stop offset="0.8" stop-color="#316c1b"/>
+      <stop offset="1" stop-color="#17540a"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M 9.00 5.00 H 55.00 A 4.00 4.00 0 0 1 59.00 9.00 V 55.00 A 4.00 4.00 0 0 1 55.00 59.00 H 9.00 A 4.00 4.00 0 0 1 5.00 55.00 V 9.00 A 4.00 4.00 0 0 1 9.00 5.00 Z" fill="#000000" opacity="0.22" transform="translate(0.8,1.6)"/>
+  <path d="M 9.00 5.00 H 55.00 A 4.00 4.00 0 0 1 59.00 9.00 V 55.00 A 4.00 4.00 0 0 1 55.00 59.00 H 9.00 A 4.00 4.00 0 0 1 5.00 55.00 V 9.00 A 4.00 4.00 0 0 1 9.00 5.00 Z" fill="url(#body)" stroke="#16304a" stroke-width="1.3" stroke-linejoin="round"/>
+  <path d="M 9.00 5.00 H 55.00 A 4.00 4.00 0 0 1 59.00 9.00 V 55.00 A 4.00 4.00 0 0 1 55.00 59.00 H 9.00 A 4.00 4.00 0 0 1 5.00 55.00 V 9.00 A 4.00 4.00 0 0 1 9.00 5.00 Z" fill="url(#sheen)"/>
+  <path d="M 19.00 5.00 L 45.00 5.00 L 45.00 26.00 L 19.00 26.00 Z" fill="url(#shut)" stroke="#16304a" stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M 36.00 8.00 L 42.00 8.00 L 42.00 23.00 L 36.00 23.00 Z" fill="#2c4b68"/>
+  <path d="M 14.00 35.00 L 50.00 35.00 L 50.00 59.00 L 14.00 59.00 Z" fill="url(#labl)" stroke="#16304a" stroke-width="1.2" stroke-linejoin="round"/>
+  <path d="M 40.00 29.00 L 51.00 29.00 L 51.00 42.00 L 57.00 42.00 L 45.50 57.00 L 34.00 42.00 L 40.00 42.00 Z" fill="#000000" opacity="0.25" transform="translate(0.8,1.6)"/>
+  <path d="M 40.00 29.00 L 51.00 29.00 L 51.00 42.00 L 57.00 42.00 L 45.50 57.00 L 34.00 42.00 L 40.00 42.00 Z" fill="url(#arrw)" stroke="#20480a" stroke-width="1.3" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Oxygen-style playlist panel icon for EasyPlayer.
+     SVG Tiny 1.2 safe: gradients only, no filters (QtSvg ignores <filter>). -->
+<!-- viewBox frames the artwork's own bounding box rather than a 64-unit square,
+     so the icon fills the canvas like the neighbouring PNGs. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="5.5 11.15 53.8 53.8">
+
+  <defs>
+    <linearGradient id="barBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#a9d4f5"/>
+      <stop offset="0.08" stop-color="#86bdea"/>
+      <stop offset="0.48" stop-color="#4b8ec9"/>
+      <stop offset="0.52" stop-color="#3f82be"/>
+      <stop offset="0.88" stop-color="#2b6499"/>
+      <stop offset="0.96" stop-color="#4a82b4"/>
+      <stop offset="1"    stop-color="#27598c"/>
+    </linearGradient>
+
+    <linearGradient id="triBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#c2ee78"/>
+      <stop offset="0.08" stop-color="#a3dd52"/>
+      <stop offset="0.48" stop-color="#74c22c"/>
+      <stop offset="0.52" stop-color="#68b524"/>
+      <stop offset="0.88" stop-color="#468c12"/>
+      <stop offset="0.96" stop-color="#63a32a"/>
+      <stop offset="1"    stop-color="#3c7a0e"/>
+    </linearGradient>
+
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="0.7" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1"   stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <radialGradient id="ground" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"   stop-color="#000000" stop-opacity="0.30"/>
+      <stop offset="0.6" stop-color="#000000" stop-opacity="0.14"/>
+      <stop offset="1"   stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- soft ground shadow -->
+  <ellipse cx="31" cy="59.5" rx="25" ry="3.6" fill="url(#ground)"/>
+
+  <!-- playlist entries -->
+  <g stroke="#1d4870" stroke-width="1">
+    <rect x="6" y="13.5" width="44" height="8" rx="4" fill="#000000" opacity="0.18" stroke="none" transform="translate(0,1.6)"/>
+    <rect x="6" y="13.5" width="44" height="8" rx="4" fill="url(#barBody)"/>
+    <rect x="7.6" y="14.8" width="40.8" height="3.4" rx="1.7" fill="url(#gloss)" stroke="none"/>
+
+    <rect x="6" y="27" width="44" height="8" rx="4" fill="#000000" opacity="0.18" stroke="none" transform="translate(0,1.6)"/>
+    <rect x="6" y="27" width="44" height="8" rx="4" fill="url(#barBody)"/>
+    <rect x="7.6" y="28.3" width="40.8" height="3.4" rx="1.7" fill="url(#gloss)" stroke="none"/>
+
+    <rect x="6" y="40.5" width="29" height="8" rx="4" fill="#000000" opacity="0.18" stroke="none" transform="translate(0,1.6)"/>
+    <rect x="6" y="40.5" width="29" height="8" rx="4" fill="url(#barBody)"/>
+    <rect x="7.6" y="41.8" width="25.8" height="3.4" rx="1.7" fill="url(#gloss)" stroke="none"/>
+  </g>
+
+  <!-- play marker, floating above the list -->
+  <path d="M 38.5 35.5 L 58.5 46.5 L 38.5 57.5 Z"
+        fill="#000000" opacity="0.22" transform="translate(0.8,2)"/>
+  <path d="M 38.5 35.5 L 58.5 46.5 L 38.5 57.5 Z"
+        fill="url(#triBody)" stroke="#2e5f0a" stroke-width="1" stroke-linejoin="round"/>
+  <path d="M 41 39.4 L 52.6 45.8 L 41 45.8 Z"
+        fill="url(#gloss)"/>
+
+</svg>

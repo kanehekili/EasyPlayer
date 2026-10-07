@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- prev chevrons for EasyPlayer.
+     Light falls from above: one shared vertical gradient spans both chevrons,
+     so they are lit as a single object rather than individually.
+     SVG Tiny 1.2 safe: gradients only, no filters, no clip paths. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+
+  <defs>
+    <linearGradient id="body" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="11.0" x2="0" y2="53.0">
+      <stop offset="0"    stop-color="#bdf07a"/>
+      <stop offset="0.12" stop-color="#8ede4a"/>
+      <stop offset="0.46" stop-color="#52b825"/>
+      <stop offset="0.50" stop-color="#46a81d"/>
+      <stop offset="0.80" stop-color="#2b7d10"/>
+      <stop offset="1"    stop-color="#17540a"/>
+    </linearGradient>
+
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse"
+                    x1="0" y1="11.0" x2="0" y2="32.0">
+      <stop offset="0"    stop-color="#ffffff" stop-opacity="0.50"/>
+      <stop offset="0.6"  stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1"    stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <g fill="#000000" opacity="0.22" transform="translate(0.8,1.6)">
+    <path d="M 60.0 11.0 L 34.5 32.0 L 60.0 53.0 Z"/>
+    <path d="M 30.5 11.0 L 5.0 32.0 L 30.5 53.0 Z"/>
+  </g>
+
+  <g fill="url(#body)" stroke="#11430a" stroke-width="1.2" stroke-linejoin="round">
+    <path d="M 60.0 11.0 L 34.5 32.0 L 60.0 53.0 Z"/>
+    <path d="M 30.5 11.0 L 5.0 32.0 L 30.5 53.0 Z"/>
+  </g>
+
+  <g fill="url(#sheen)">
+    <path d="M 60.0 11.0 L 34.5 32.0 L 60.0 32.0 Z"/>
+    <path d="M 30.5 11.0 L 5.0 32.0 L 30.5 32.0 Z"/>
+  </g>
+
+</svg>

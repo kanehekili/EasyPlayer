@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="6 10 52 52">
+  <!-- flat playlist: same composition as icons/playlist.svg, silhouette only.
+       Gaps are wider than in the gradient version, which relies on outlines
+       and drop shadows to keep the triangle clear of the bars. -->
+  <g fill="#000000">
+    <rect x="6" y="12" width="44" height="8" rx="4"/>
+    <rect x="6" y="25" width="44" height="8" rx="4"/>
+    <rect x="6" y="38" width="24" height="8" rx="4"/>
+    <path d="M 36 37 L 58 48.5 L 36 60 Z"/>
+  </g>
+</svg>

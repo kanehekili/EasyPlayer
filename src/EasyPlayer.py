@@ -9,8 +9,8 @@
 # warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the  GNU General Public License for more
 # details.
 #
-# You did not receive a copy of the  GNU General Public License along with this program.  See
-# <http://www.gnu.org/licenses/>.
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, see <https://www.gnu.org/licenses/>.
 
 '''
 Created on Dec 4, 2025
@@ -36,6 +36,8 @@ from Slideshow import ImageOverlay, SlideshowController, PICTURE_EXTENSIONS
 from AudioPlay import SpectrumController, SpectrumOverlay, HAS_SPECTRUM
 import Playlist
 from Playlist import PlaylistPanel, PlaylistManager, PLAYLIST_EXTENSIONS, MEDIA_EXTENSIONS
+import Osd
+from Osd import OsdController
 
 
 
@@ -70,6 +72,8 @@ class Player(QOpenGLWidget):
     playlistTrackChanged = pyqtSignal(str)
     zoomChanged = pyqtSignal(bool)
     itemEnded = pyqtSignal()  # current track played to its end (mpv thread -> queued)
+    mouseActive = pyqtSignal()  # mouse moved over the video surface
+    overlayRaised = pyqtSignal()  # z-order of the video overlays changed
 
     def __init__(self, parent, path=None, isVirtual=False):
         super().__init__(parent)
@@ -99,7 +103,8 @@ class Player(QOpenGLWidget):
         self._imageOverlay = ImageOverlay(self)
         self._imageOverlay.hide()
         self.playlistManager = PlaylistManager()
-        
+        self.setMouseTracking(True)  # moves without a pressed button - the OSD needs them
+
     def initializeGL(self) -> None:
         self.ctx = MpvRenderContext(
             self.mpv, 'opengl',
@@ -206,6 +211,10 @@ class Player(QOpenGLWidget):
         else:
             self.unsetCursor()
 
+    def restoreCursor(self):
+        """the cursor the current state asks for - zoom hand or plain arrow"""
+        self._onZoomChanged(self.zoomCtrl.isActive())
+
     def mousePressEvent(self, event):
         if event.button() == QtCore.Qt.MouseButton.LeftButton and self.zoomCtrl.isActive():
             self._dragPos = event.position()
@@ -215,6 +224,7 @@ class Player(QOpenGLWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        self.mouseActive.emit()
         if self._dragPos is not None:
             pos = event.position()
             self.zoomCtrl.panBy(pos.x() - self._dragPos.x(), pos.y() - self._dragPos.y())
@@ -246,6 +256,7 @@ class Player(QOpenGLWidget):
         self._imageOverlay.setImage(path)
         self._imageOverlay.show()
         self._imageOverlay.raise_()
+        self.overlayRaised.emit()
 
     def hideImage(self):
         self.zoomCtrl.resetState()
@@ -741,7 +752,10 @@ class MainFrame(QtWidgets.QMainWindow):
         self.shortcutPlay.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
         self.shortcutPlay.activated.connect(self.playVideo)
         self.playAction.triggered.connect(self.playVideo)
-        
+
+        self.stopAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("stopAction")), 'Stop (pause and leave fullscreen)', self)
+        self.stopAction.triggered.connect(self.stopVideo)
+
         self.prevAction = QtGui.QAction(QtGui.QIcon(ICOMAP.ico("prev")), 'Previous picture/video (Ctrl+Left)', self)
         self.prevAction.triggered.connect(self.player.prevTrack)
         self.prevAction.setEnabled(False)
@@ -841,14 +855,18 @@ class MainFrame(QtWidgets.QMainWindow):
 
         self._createSlider()
        
-        box = self._makeLayout()
+        self._mainBox = self._makeLayout()
         wid = QtWidgets.QWidget(self)
-        self.setCentralWidget(wid)    
-        wid.setLayout(box)
-        self.resize(1024, 640) 
+        self.setCentralWidget(wid)
+        wid.setLayout(self._mainBox)
+        self.resize(1024, 640)
         # --- shortcut for fullscreen toggle ---
         # F11 Shortcut is defined in the fullscreen action
         QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_Escape), self, activated=self._setNormalScreen)
+        self.osdCtrl = OsdController(self.player,
+            (self.prevAction, self.playAction, self.stopAction, self.nextAction))
+        self.player.mouseActive.connect(self.osdCtrl.wake)
+        self.player.overlayRaised.connect(self.osdCtrl.raiseToTop)
         self.player.triggerInitialized.connect(self._showIdleIcon)
         self.player.onError.connect(self._onPlayerError)
 
@@ -863,23 +881,26 @@ class MainFrame(QtWidgets.QMainWindow):
         if not self._fullscreen:
             self._panelWasVisible = self.playlistPanel.isVisible()
             self.toolbar.hide()
-            self.ui_InfoRow.hide()
-            self.ui_Slider.hide()
             self.playlistPanel.hide()
+            self.osdCtrl.takeWidgets(self.ui_InfoRow, self.ui_Slider)
             self._fullscreen = True
             self.showFullScreen()
             self.player.setCursor(QtCore.Qt.CursorShape.BlankCursor)
             pos = QtGui.QCursor.pos()
             QtCore.QTimer.singleShot(50, lambda: (QtGui.QCursor.setPos(self.player.mapToGlobal(QtCore.QPoint(pos.x() + 1, pos.y())))))
+            self.osdCtrl.enable()
 
     def _setNormalScreen(self):
         if self._fullscreen:
+            self.osdCtrl.disable()
+            for widget in self.osdCtrl.releaseWidgets():
+                self._mainBox.addWidget(widget)
             self.toolbar.show()
             self.ui_InfoRow.show()
             self.ui_Slider.show()
             self._fullscreen = False
             self.showNormal()
-            self.player.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+            self.player.restoreCursor()
             self.playlistPanelAction.blockSignals(True)
             self.playlistPanelAction.setChecked(self._panelWasVisible)
             self.playlistPanelAction.blockSignals(False)
@@ -1090,6 +1111,11 @@ class MainFrame(QtWidgets.QMainWindow):
             return
         self.playback.toggle()
 
+    def stopVideo(self):
+        """stop where we are: hold the current frame, stop following, leave fullscreen"""
+        self.playback.setPlaying(False, follow=False)
+        self._setNormalScreen()  # no-op when not fullscreen
+
     def _isIdleWithPanelTracks(self):
         """play pressed after tracks were added but never started"""
         if not self.player.mpv or not self.playlistPanel.getPaths():
@@ -1097,6 +1123,7 @@ class MainFrame(QtWidgets.QMainWindow):
         return not self.player.mpv.path
 
     def _onSyncPlayerControls(self, isPlaying):
+        self.osdCtrl.setPlaying(isPlaying)
         if isPlaying:
             self.__enableActionsOnVideoPlay(False)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playPause")))
@@ -1587,9 +1614,9 @@ class IconMapper():
         with open(ipath) as fn:
             self.map = json.load(fn)
             
-    def ico(self, name):
+    def ico(self, name, section=None):
         key = name.strip()
-        submap = self.map.get(self.section, None)
+        submap = self.map.get(section or self.section, None)
         if not submap:
             submap = self.map[self.DEFAULT]
         return submap.get(key, self.getDefault(key))
@@ -1719,6 +1746,7 @@ def main():
         ep_config.read();    
         ICOMAP = IconMapper(ep_config.get("icoSet", "default"))
         Playlist.init(ep_config, ICOMAP)
+        Osd.init(ICOMAP)
         argv = sys.argv
         res = parseOptions(argv)
         res["virtual"] = res["virtual"] or ep_config.getBoolean("softwareRender", False)
