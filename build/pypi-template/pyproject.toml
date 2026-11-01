@@ -11,6 +11,12 @@ license = "GPL-2.0-or-later"
 requires-python = ">=3.9"
 dependencies = ["PyQt6"]
 
+# numpy drives the spectrum analyzer (AudioPlay.HAS_SPECTRUM), which also needs
+# parec from pulseaudio-utils - a dependency pip cannot express at all. Optional
+# everywhere, matching optdepends on Arch and Suggests on the DEBs.
+[project.optional-dependencies]
+spectrum = ["numpy"]
+
 [project.urls]
 Homepage = "https://github.com/kanehekili/EasyPlayer"
 

@@ -95,6 +95,7 @@ class Player(QOpenGLWidget):
         self.sliderThread = None
         self.lastError = None
         self.isAudioOnly = False
+        self.isIntelGpu = False
         self.durString = "00:00:00"
         self._opengl_fbo = None
         self.spectrumCtrl = SpectrumController(self)
@@ -115,7 +116,10 @@ class Player(QOpenGLWidget):
         if self.ctx:
             if FFMPEGTools.OSTools().fileExists("/proc/driver/nvidia/version"):
                 self.mpv.hwdec = "nvdec"
-                Log.info("Switched to nvdec")            
+                Log.info("Switched to nvdec")
+            elif FFMPEGTools.OSTools().is_intel_gpu_active():
+                self.isIntelGpu = True
+                Log.info("Intel GPU detected - decoder selected per item")
             self.ctx.update_cb = self._on_update
             self.triggerInitialized.emit()
 
@@ -292,14 +296,52 @@ class Player(QOpenGLWidget):
         if val and self.isPlaylist:
             self.playlistTrackChanged.emit(val)
 
+    def _hwdecForTrack(self, idx):
+        """Intel only: vaapi-copy is the one hw path that engages inside the GL
+        FBO, but it costs over a second on a single large still - the overlay
+        cannot paint until mpv is done with the same file. Stills decode in
+        software (identical pixels, ~10x faster), video keeps the hw path."""
+        if not self.isIntelGpu or self.mpv is None:
+            return
+        try:
+            entries = self.mpv.playlist
+            if not (0 <= idx < len(entries)):
+                return
+            name = entries[idx].get('filename') or ''
+            self._applyHwdec(name)
+        except Exception:
+            Log.info("hwdec selection failed")
+
+    def _hwdecForPath(self, path):
+        """same choice, for paths that are loaded directly rather than by index"""
+        if not self.isIntelGpu or self.mpv is None or not path:
+            return
+        try:
+            self._applyHwdec(path)
+        except Exception:
+            Log.info("hwdec selection failed")
+
+    def _applyHwdec(self, name):
+        """mpv reports hwdec as a list - compare against its first entry, or the
+        write happens on every navigation and re-inits the decoder for nothing"""
+        want = 'no' if OSTools().getExtension(name).lower() in PICTURE_EXTENSIONS else 'auto-safe'
+        current = self.mpv.hwdec
+        if isinstance(current, (list, tuple)):
+            current = current[0] if current else ''
+        if current != want:
+            self.mpv.hwdec = want
+
     def nextTrack(self):
         """Manual navigation wraps around. A running show never calls this at
         the last item (onItemEnded checks hasNextTrack), so shows still end."""
         try:
             count = len(self.mpv.playlist)
-            if count > 1 and self.mpv.playlist_pos == count - 1:
+            pos = self.mpv.playlist_pos
+            if count > 1 and pos == count - 1:
+                self._hwdecForTrack(0)
                 self.mpv.playlist_pos = 0          # wrap to the first item
             else:
+                self._hwdecForTrack(pos + 1)
                 self.mpv.playlist_next()
         except Exception:
             Log.info("no nextTrack")
@@ -307,9 +349,12 @@ class Player(QOpenGLWidget):
     def prevTrack(self):
         try:
             count = len(self.mpv.playlist)
-            if count > 1 and self.mpv.playlist_pos == 0:
-                self.mpv.playlist_pos = count - 1  # wrap to the last item
+            pos = self.mpv.playlist_pos
+            if count > 1 and pos == 0:
+                self._hwdecForTrack(count - 1)     # wrap to the last item
+                self.mpv.playlist_pos = count - 1
             else:
+                self._hwdecForTrack(pos - 1)
                 self.mpv.playlist_prev()
         except Exception:
             Log.info("no prevTrack")
@@ -317,6 +362,7 @@ class Player(QOpenGLWidget):
     def jumpToTrack(self, idx):
         """Jump to a specific playlist index. Transport is applied by PlaybackController."""
         try:
+            self._hwdecForTrack(idx)
             self.mpv.playlist_pos = idx
         except Exception:
             Log.info("jumpToTrack %d failed", idx)
@@ -338,6 +384,7 @@ class Player(QOpenGLWidget):
         # playlist-start keeps mpv from auto-starting entry 0 while we append;
         # playlist-play-index then starts exactly the file that was opened
         self.mpv['playlist-start'] = startIdx
+        self._hwdecForPath(paths[startIdx])
         for p in paths:
             self.mpv.loadfile(p, 'append')
         self.mpv.command('playlist-play-index', startIdx)
@@ -387,10 +434,12 @@ class Player(QOpenGLWidget):
                     self.lastError = "Empty or unreadable playlist"
                     self.onError.emit(self.lastError)
                 else:
+                    self._hwdecForPath(entries[0])
                     self.mpv.loadfile(entries[0], 'replace')
                     for entry in entries[1:]:
                         self.mpv.loadfile(entry, 'append')
             else:
+                self._hwdecForPath(self.filePath)
                 self.mpv.loadfile(self.filePath)
             self._getReady()
             if not self.lastError:
@@ -424,7 +473,17 @@ class Player(QOpenGLWidget):
                     self.seekLock.notify()
     
     def isPlaying(self):
-        return not self.mpv.pause    
+        return not self.mpv.pause
+
+    def hasVideoTrack(self):
+        """mpv.vid reads 'auto' until a track is resolved - truthiness is not
+        enough, or the audio cover is suppressed right after a track change"""
+        vid = self.mpv.vid
+        if vid in (False, None, 'no'):
+            return False
+        if vid == 'auto':  # unresolved - ask what is actually decoding
+            return bool(self.mpv.video_params)
+        return True
 
     def isEOF(self):
         return self.mpv.eof_reached
@@ -704,13 +763,19 @@ class AudioDisplayController:
         if not self._player.isAudioOnly:
             self._player.spectrumCtrl.stopCapture()
             return
-        if self._settings.hasEQ():
+        if self._settings.hasEQ() and self._player.spectrumCtrl.startCapture():
             self._player.hideImage()
-            self._player.spectrumCtrl.startCapture()
-        else:
-            self._player.spectrumCtrl.stopCapture()
-            if not self._player.mpv.vid:
-                self._player.showImage(self._fallbackImage)
+            return
+        # no EQ, or capture failed - never leave the player blank
+        self._player.spectrumCtrl.stopCapture()
+        if not self._player.hasVideoTrack():
+            self._player.showImage(self._fallbackImage)
+
+    def suspend(self):
+        """paused audio: stop the capture but leave the cover up, not a black player"""
+        self._player.spectrumCtrl.stopCapture()
+        if self._player.isAudioOnly and not self._player.hasVideoTrack():
+            self._player.showImage(self._fallbackImage)
 
 
 class MainFrame(QtWidgets.QMainWindow):
@@ -1127,12 +1192,17 @@ class MainFrame(QtWidgets.QMainWindow):
         if isPlaying:
             self.__enableActionsOnVideoPlay(False)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playPause")))
-            if self.player.isAudioOnly and not HAS_SPECTRUM:
-                self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy")
+            if self.player.isAudioOnly and not self.slideshowCtrl.isShowingStill():
+                self.audioDisplayCtrl.update()
+                if not HAS_SPECTRUM:
+                    self.ui_NowPlaying.setText("Spectrum analyzer not available — install numpy")
         else:
             self.__enableActionsOnVideoPlay(True)
             self.playAction.setIcon(QtGui.QIcon(ICOMAP.ico("playStart")))
-            self.player.spectrumCtrl.stopCapture()             
+            if self.player.isAudioOnly and not self.slideshowCtrl.isShowingStill():
+                self.audioDisplayCtrl.suspend()
+            else:
+                self.player.spectrumCtrl.stopCapture()
 
     # manual slider - sync with gui    
     def _onSliderPressed(self):
@@ -1239,6 +1309,11 @@ class MainFrame(QtWidgets.QMainWindow):
             self.playback.onItemLoaded()  # keep playing / keep paused - never flip
             return
         if path == getattr(self.player, '_probedPath', None):
+            # same file - restore the display, leave transport alone
+            if self.playback.isPlaying():
+                self.audioDisplayCtrl.update()
+            else:
+                self.audioDisplayCtrl.suspend()
             return
         self.asyncPlay(self.player._probeCurrentTrack)
 

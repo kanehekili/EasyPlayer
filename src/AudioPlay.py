@@ -137,6 +137,7 @@ class SpectrumController(QtCore.QObject):
         self._player = player
         self._specStream = None
         self._monitorDevice = None
+        self._monitorFailed = False
         self._overlay = SpectrumOverlay(player)
         self._overlay.hide()
 
@@ -154,13 +155,17 @@ class SpectrumController(QtCore.QObject):
         return self._overlay.mode
 
     def startCapture(self):
-        if not HAS_SPECTRUM or self._specStream is not None:
-            return
+        """True when the overlay is up and capturing - the caller decides what
+        to show when it is not."""
+        if not HAS_SPECTRUM:
+            return False
+        if self._specStream is not None:
+            return True
         try:
             device = self._findMonitorDevice()
             if not device:
                 Log.warning("Spectrum capture failed - no monitor device found")
-                return
+                return False
             self._specStream = ParecStream(
                 device,
                 SPECTRUM_SAMPLE_RATE,
@@ -169,8 +174,10 @@ class SpectrumController(QtCore.QObject):
             )
             self._specStream.start()
             self._overlay.show()
+            return True
         except Exception:
             Log.warning("Spectrum capture failed - no valid device found")
+            return False
 
     def stopCapture(self):
         if self._specStream:
@@ -184,17 +191,21 @@ class SpectrumController(QtCore.QObject):
         self._overlay.clearMags()
 
     def _findMonitorDevice(self):
-        if self._monitorDevice:
-            return self._monitorDevice
+        """Resolved on every start so a changed default sink is picked up - but
+        a missing pactl is remembered, or each play press would stall the GUI."""
+        if self._monitorFailed:
+            return None
         try:
             result = subprocess.run(['pactl', 'get-default-sink'], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0:
+            if result.returncode == 0 and result.stdout.strip():
                 monitor = result.stdout.strip() + '.monitor'
-                Log.info("Spectrum: using parec with monitor source %s", monitor)
-                self._monitorDevice = monitor
+                if monitor != self._monitorDevice:
+                    Log.info("Spectrum: using parec with monitor source %s", monitor)
+                    self._monitorDevice = monitor
                 return monitor
         except Exception:
             pass
+        self._monitorFailed = True
         Log.info("Spectrum: no monitor device found")
         return None
 

@@ -259,18 +259,32 @@ tasks.register("upload_pypi") {
 
         // inheritIO() would write to the gradle daemon's streams, not the console
         def run = { List<String> cmd ->
+            // "python3 -m twine" is reported as "twine", not as "python3"
+            def tool = (cmd.size() > 2 && cmd[1] == "-m") ? cmd[2] : cmd.first()
+            def output = []
             def proc = new ProcessBuilder(cmd).directory(pypiOut).redirectErrorStream(true).start()
-            proc.inputStream.eachLine { println "  $it" }
+            proc.inputStream.eachLine { output << it; println "  $it" }
             def rc = proc.waitFor()
-            if (rc != 0) throw new GradleException("${cmd.first()} failed with exit code ${rc}")
+            if (rc != 0) {
+                // gradle prints only the exception - repeat the tail of the output there
+                def tail = output.findAll { it.trim() }.takeRight(10)
+                throw new GradleException(
+                    "${tool} failed with exit code ${rc}\n" +
+                    "  command: ${cmd.join(' ')}\n" +
+                    "  workdir: ${pypiOut}\n" +
+                    (tail ? "  last output:\n" + tail.collect { "    $it" }.join("\n")
+                          : "  (no output)"))
+            }
         }
 
         run(["python3", "-m", "build"])
 
         // ProcessBuilder does not expand globs - pass the built files explicitly
         def artifacts = fileTree("${pypiOut}/dist").files*.path.sort()
-        run(["twine", "check", "--strict"] + artifacts)
-        run(["twine", "upload"] + artifacts)
+        // "python3 -m twine", not bare "twine": a launcher started outside a
+        // login shell (Eclipse, a desktop icon) has no ~/.local/bin on PATH
+        run(["python3", "-m", "twine", "check", "--strict"] + artifacts)
+        run(["python3", "-m", "twine", "upload"] + artifacts)
 
         println "  Done: https://pypi.org/project/easympv/${version}/"
     }

@@ -255,6 +255,23 @@ class OSTools():
         except Exception:
             return False
 
+    def is_intel_gpu_active(self):
+        """Intel graphics - discrete (Arc/DG2) or integrated. Only the display
+        controller line counts: 'Intel' appears all over lspci on any Intel
+        board, so matching the whole output would hit AMD/NVIDIA boxes too."""
+        try:
+            result = subprocess.run(["lspci"], stdout=subprocess.PIPE, text=True)
+            for line in result.stdout.splitlines():
+                if "Intel" not in line:
+                    continue
+                if ("VGA compatible controller" in line
+                        or "Display controller" in line
+                        or "3D controller" in line):
+                    return True
+            return False
+        except Exception:
+            return False
+
     def currentDesktop(self):
         return os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
