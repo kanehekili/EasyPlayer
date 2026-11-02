@@ -62,6 +62,8 @@ EASYPLAYER_SKIP_GUI=1 python3 -m unittest discover -s tests
 | `test_loader.py` | `Player.startPlayingList` and the next/prev wrap-around against a **real** libmpv |
 | `test_playvideo.py` | which branch `MainFrame.playVideo` takes, and that a panel double-click is navigation while the play button dictates a run |
 | `test_title.py` | what the window title shows, and why streams are excluded |
+| `test_decoder.py` | `MediaKind` classification, `hasVideoTrack` against mpv's `'auto'`, Intel GPU detection, and the per-item hardware/software decoder choice |
+| `test_audiodisplay.py` | spectrum vs cover vs nothing: capture failure falling back to the cover, pause restoring it, stills never starting capture, and the monitor-device lookup |
 | `test_gui.py` | the **real app on a real display**: window opens, toolbar icons are drawn, ctrl+Right/Left walk the folder and retitle the window |
 
 ## Fixtures
@@ -109,8 +111,17 @@ whose violation caused the slideshow to run behind a "Play" icon.
 
 ## Things that are not covered
 
-- The spectrum analyser, and `Player.paintGL` in any detail - `test_gui.py`
-  proves the render context comes up and draws, nothing finer than that.
+- `Player.paintGL` in any detail - `test_gui.py` proves the render context
+  comes up and draws, nothing finer than that.
+- **Decoder timings.** `test_decoder.py` covers which decoder is chosen, never
+  how long it takes. On an Intel ARC a large JPEG took 1.6 s through
+  `vaapi-copy` and 0.12 s in software, but that number belongs to one GPU and
+  one driver - asserting it would fail everywhere else. The same goes for the
+  audio cover blanking for ~67 ms on a track change, which is wanted behaviour
+  (it signals the change) and is measured in frames, not unit tests.
+- **Real audio capture.** `test_audiodisplay.py` stubs `parec` and `pactl`
+  throughout. Whether capture actually produces samples depends on PulseAudio
+  or PipeWire being up with a monitor source, which no CI machine can promise.
 - Drag and drop into the playlist panel, and the file dialogs themselves.
 - Window layout and geometry - the toolbar is only checked for icons being
   drawn, not for arrangement.

@@ -30,6 +30,7 @@ from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
 from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
 import sys, json, FFMPEGTools, getopt, traceback, locale, re, math
+from enum import Enum
 from threading import Condition
 from QtTools import SliderThread, installSigIntHandler
 from Slideshow import ImageOverlay, SlideshowController, PICTURE_EXTENSIONS
@@ -38,17 +39,39 @@ import Playlist
 from Playlist import PlaylistPanel, PlaylistManager, PLAYLIST_EXTENSIONS, MEDIA_EXTENSIONS
 import Osd
 from Osd import OsdController
-
-
-
 global Log
 global AppName
-AppName="EasyPlayer"
-Log = FFMPEGTools.Log
-AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "CosmicRock.jpg")
+
 #####################################################
 Version = "@xxx@"
 #####################################################
+
+AppName="EasyPlayer"
+Log = FFMPEGTools.Log
+AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "CosmicRock.jpg")
+SLIDE_DURATION = 10
+ZOOM_MAX = 8.0  # 800%
+ZOOM_STEP = 1.1  # per wheel notch
+
+
+class MediaKind(Enum):
+    """What the current item is. STILL comes from the extension alone, so it is
+    never stale - pictures are not probed, which is what made isAudioOnly lie.
+    A non-picture counts as VIDEO until the probe says otherwise: the audio-only
+    behaviours all gate on AUDIO, so that default fails safe."""
+    NONE = 0
+    STILL = 1
+    AUDIO = 2
+    VIDEO = 3
+
+    @classmethod
+    def of(cls, path):
+        """kind of a path, without probing - for items not loaded yet"""
+        if not path:
+            return cls.NONE
+        if OSTools().getExtension(path).lower() in PICTURE_EXTENSIONS:
+            return cls.STILL
+        return cls.VIDEO
 
 
 def get_process_address(_, name):
@@ -56,11 +79,6 @@ def get_process_address(_, name):
     address = int(glctx.getProcAddress(QByteArray(name)))
     # return ctypes.cast(address, ctypes.c_void_p).value
     return address
-
-
-SLIDE_DURATION = 10
-
-
 
 class Player(QOpenGLWidget):
     ERR_IDS = ["No video or audio streams selected.", "Failed to recognize file format."]
@@ -81,9 +99,10 @@ class Player(QOpenGLWidget):
         self.seekLock = Condition()
         self.ctx = None
         self._timePos = 0;
-        self.streamData = None
+        self._resetItemState()
         self._demuxOffset = 0.1
-        self.mpv = MPV(**self._getMPVArgs(isVirtual))
+        self.isIntelGpu = False   # set by _gpuArgs - must exist before mpv is built
+        self.mpv = self._createMpv(isVirtual)
         self.filePath = path
         self.isPlaylist = False
         self._hookEvents()
@@ -93,9 +112,6 @@ class Player(QOpenGLWidget):
         self.setUpdateBehavior(QOpenGLWidget.UpdateBehavior.PartialUpdate)
         self.duration = 0
         self.sliderThread = None
-        self.lastError = None
-        self.isAudioOnly = False
-        self.isIntelGpu = False
         self.durString = "00:00:00"
         self._opengl_fbo = None
         self.spectrumCtrl = SpectrumController(self)
@@ -114,22 +130,36 @@ class Player(QOpenGLWidget):
             },
         )
         if self.ctx:
-            if FFMPEGTools.OSTools().fileExists("/proc/driver/nvidia/version"):
-                self.mpv.hwdec = "nvdec"
-                Log.info("Switched to nvdec")
-            elif FFMPEGTools.OSTools().is_intel_gpu_active():
-                self.isIntelGpu = True
-                Log.info("Intel GPU detected - decoder selected per item")
             self.ctx.update_cb = self._on_update
             self.triggerInitialized.emit()
+
+    def _createMpv(self, isVirtual):
+        """Survive a machine whose GL stack cannot serve us. vo has to stay
+        libmpv - MpvRenderContext only receives frames from that VO, and any
+        other one would open a window of its own - so the fallback is the GL
+        mode, not a vo chain like the wid-based players can use."""
+        try:
+            return MPV(**self._getMPVArgs(isVirtual))
+        except Exception:
+            if isVirtual:
+                raise
+            Log.exception("mpv init failed - retrying in software rendering mode")
+            return MPV(**self._getMPVArgs(True))
+
+    def _resetItemState(self):
+        """everything that describes the current item - one place, so the three
+        callers cannot drift apart. Runs before mpv is built, which is why the
+        log handler can rely on lastError existing."""
+        self.streamData = None
+        self.isAudioOnly = False
+        self.kind = MediaKind.NONE
+        self.lastError = None
+        self._probedPath = None
 
     def setStreamData(self, fn):
         self.filePath = None
         self.isPlaylist = False
-        self.streamData = None
-        self.isAudioOnly = False
-        self.lastError = None
-        self._probedPath = None
+        self._resetItemState()
         if fn:
             ext = FFMPEGTools.OSTools().getExtension(fn)
             self.isPlaylist = ext.lower() in PLAYLIST_EXTENSIONS
@@ -296,40 +326,46 @@ class Player(QOpenGLWidget):
         if val and self.isPlaylist:
             self.playlistTrackChanged.emit(val)
 
-    def _hwdecForTrack(self, idx):
-        """Intel only: vaapi-copy is the one hw path that engages inside the GL
-        FBO, but it costs over a second on a single large still - the overlay
-        cannot paint until mpv is done with the same file. Stills decode in
-        software (identical pixels, ~10x faster), video keeps the hw path."""
-        if not self.isIntelGpu or self.mpv is None:
+    def _prepareTrack(self, idx):
+        """kind + decoder for the item about to load, addressed by playlist index"""
+        if self.mpv is None:
             return
         try:
             entries = self.mpv.playlist
-            if not (0 <= idx < len(entries)):
-                return
-            name = entries[idx].get('filename') or ''
-            self._applyHwdec(name)
+            if 0 <= idx < len(entries):
+                self._prepareTrackPath(entries[idx].get('filename') or '')
         except Exception:
-            Log.info("hwdec selection failed")
+            Log.info("track preparation failed")
 
-    def _hwdecForPath(self, path):
-        """same choice, for paths that are loaded directly rather than by index"""
-        if not self.isIntelGpu or self.mpv is None or not path:
+    def _prepareTrackPath(self, path):
+        """The kind comes from the extension - no probe, so it cannot go stale
+        the way isAudioOnly does for pictures. _probeCurrentTrack later refines
+        VIDEO to AUDIO.
+
+        Intel only: vaapi-copy is the one hw path that engages inside the GL
+        FBO, but it costs over a second on a single large still - the overlay
+        cannot paint until mpv is done with the same file. Stills decode in
+        software (identical pixels, ~10x faster), video keeps the hw path."""
+        if self.mpv is None or not path:
             return
+        self.kind = MediaKind.of(path)
+        if self.kind is MediaKind.VIDEO and path == self._probedPath:
+            # already probed - isAudioOnly still describes this very path, and no
+            # second probe will run to refine the conservative VIDEO default
+            self.kind = MediaKind.AUDIO if self.isAudioOnly else MediaKind.VIDEO
+        if not self.isIntelGpu:
+            return
+        want = 'no' if self.kind is MediaKind.STILL else 'auto-safe'
         try:
-            self._applyHwdec(path)
+            # mpv reports hwdec as a list - compare against its first entry, or
+            # the write happens on every navigation and re-inits for nothing
+            current = self.mpv.hwdec
+            if isinstance(current, (list, tuple)):
+                current = current[0] if current else ''
+            if current != want:
+                self.mpv.hwdec = want
         except Exception:
             Log.info("hwdec selection failed")
-
-    def _applyHwdec(self, name):
-        """mpv reports hwdec as a list - compare against its first entry, or the
-        write happens on every navigation and re-inits the decoder for nothing"""
-        want = 'no' if OSTools().getExtension(name).lower() in PICTURE_EXTENSIONS else 'auto-safe'
-        current = self.mpv.hwdec
-        if isinstance(current, (list, tuple)):
-            current = current[0] if current else ''
-        if current != want:
-            self.mpv.hwdec = want
 
     def nextTrack(self):
         """Manual navigation wraps around. A running show never calls this at
@@ -338,10 +374,10 @@ class Player(QOpenGLWidget):
             count = len(self.mpv.playlist)
             pos = self.mpv.playlist_pos
             if count > 1 and pos == count - 1:
-                self._hwdecForTrack(0)
+                self._prepareTrack(0)
                 self.mpv.playlist_pos = 0          # wrap to the first item
             else:
-                self._hwdecForTrack(pos + 1)
+                self._prepareTrack(pos + 1)
                 self.mpv.playlist_next()
         except Exception:
             Log.info("no nextTrack")
@@ -351,10 +387,10 @@ class Player(QOpenGLWidget):
             count = len(self.mpv.playlist)
             pos = self.mpv.playlist_pos
             if count > 1 and pos == 0:
-                self._hwdecForTrack(count - 1)     # wrap to the last item
+                self._prepareTrack(count - 1)     # wrap to the last item
                 self.mpv.playlist_pos = count - 1
             else:
-                self._hwdecForTrack(pos - 1)
+                self._prepareTrack(pos - 1)
                 self.mpv.playlist_prev()
         except Exception:
             Log.info("no prevTrack")
@@ -362,7 +398,7 @@ class Player(QOpenGLWidget):
     def jumpToTrack(self, idx):
         """Jump to a specific playlist index. Transport is applied by PlaybackController."""
         try:
-            self._hwdecForTrack(idx)
+            self._prepareTrack(idx)
             self.mpv.playlist_pos = idx
         except Exception:
             Log.info("jumpToTrack %d failed", idx)
@@ -371,10 +407,7 @@ class Player(QOpenGLWidget):
         """Load an in-memory path list into mpv and start at startIdx. Runs in Worker."""
         self.isPlaylist = True
         self.filePath = None
-        self.streamData = None
-        self.isAudioOnly = False
-        self.lastError = None
-        self._probedPath = None
+        self._resetItemState()
         if not paths:
             self.fileLoaded.emit()
             return
@@ -384,7 +417,7 @@ class Player(QOpenGLWidget):
         # playlist-start keeps mpv from auto-starting entry 0 while we append;
         # playlist-play-index then starts exactly the file that was opened
         self.mpv['playlist-start'] = startIdx
-        self._hwdecForPath(paths[startIdx])
+        self._prepareTrackPath(paths[startIdx])
         for p in paths:
             self.mpv.loadfile(p, 'append')
         self.mpv.command('playlist-play-index', startIdx)
@@ -401,7 +434,7 @@ class Player(QOpenGLWidget):
         if not path:
             self.fileLoaded.emit()
             return
-        if path == getattr(self, '_probedPath', None):
+        if path == self._probedPath:
             return
         self._probedPath = path
         self.zoomCtrl.reset()
@@ -410,6 +443,8 @@ class Player(QOpenGLWidget):
             sd = FFStreamProbe(path)
             self.streamData = sd
             self.isAudioOnly = sd.getVideoStream() is None
+            if self.kind is not MediaKind.STILL:  # a picture stays a picture
+                self.kind = MediaKind.AUDIO if self.isAudioOnly else MediaKind.VIDEO
             self._tweak(sd)
         except IOError:
             Log.exception("Setting Stream Data")
@@ -434,12 +469,12 @@ class Player(QOpenGLWidget):
                     self.lastError = "Empty or unreadable playlist"
                     self.onError.emit(self.lastError)
                 else:
-                    self._hwdecForPath(entries[0])
+                    self._prepareTrackPath(entries[0])
                     self.mpv.loadfile(entries[0], 'replace')
                     for entry in entries[1:]:
                         self.mpv.loadfile(entry, 'append')
             else:
-                self._hwdecForPath(self.filePath)
+                self._prepareTrackPath(self.filePath)
                 self.mpv.loadfile(self.filePath)
             self._getReady()
             if not self.lastError:
@@ -531,6 +566,24 @@ class Player(QOpenGLWidget):
         self.mpv = None
         event.accept()
 
+    def _gpuArgs(self):
+        """GPU specific mpv options. Resolved before mpv is built, so the very
+        first file already gets the right decoder - setting it after the GL
+        context exists leaves that file on the default. Precedence is decided
+        here, not by the order of branches somewhere else."""
+        tools = FFMPEGTools.OSTools()
+        if tools.fileExists("/proc/driver/nvidia/version"):
+            Log.info("Nvidia detected - nvdec")
+            return {"hwdec": "nvdec"}
+        if tools.is_intel_gpu_active():
+            # vaapi-copy is the only hw path that engages inside the GL FBO and
+            # it stalls on a single large still - _prepareTrack picks per item
+            self.isIntelGpu = True
+            Log.info("Intel GPU detected - decoder selected per item")
+            return {"hwdec": "auto-safe"}
+        return {}   # AMD: case 3 goes here
+
+    # test code - not wired up, kept as a reference argument set
     def _getMPVArgsEasy(self,isVirtual):
         kwArgs = {"hwdec":"auto-safe", "log_handler":self._passLog, "loglevel": 'error', "pause":False, "audio": "1", "keep_open": "always", "vo":"libmpv",
                 "input_vo_keyboard": False, "video-latency-hacks": "yes", "hr_seek": 'yes', "hr_seek_demuxer_offset": self._demuxOffset,  # below is test
@@ -561,11 +614,13 @@ class Player(QOpenGLWidget):
             "opengl_early_flush":'yes',
             "image_display_duration": "inf"
             }
-        if isVirtual:
+        if isVirtual:  # software rendering - no GPU specifics at all
             Log.info("Runs in VIRTGL mode")
             kwArgs['gpu-dumb-mode'] = 'yes'
             kwArgs['vd-lavc-dr'] = 'no'
             kwArgs['hwdec']= "none"
+        else:
+            kwArgs.update(self._gpuArgs())
         return kwArgs
         
     def _passLog(self, __loglevel, component, message):
@@ -575,12 +630,7 @@ class Player(QOpenGLWidget):
                 Log.error(">%s", msg)
                 self.lastError = message
                 self.onError.emit(message)
-                self.seekLock.notify_all() 
-
-
-
-ZOOM_MAX = 8.0  # 800%
-ZOOM_STEP = 1.1  # per wheel notch
+                self.seekLock.notify_all()
 
 
 class ZoomController:
@@ -785,6 +835,7 @@ class MainFrame(QtWidgets.QMainWindow):
         self._isStarted = False
         self.__qapp = qapp
         super(MainFrame, self).__init__()
+        self.isVirtual = isVirtual  # -v or the stored setting - the dialog shows it
         self.player = Player(self, aPath, isVirtual)
         self.settings = SettingsModel(self)
         self.audioMapping = None
@@ -1308,7 +1359,7 @@ class MainFrame(QtWidgets.QMainWindow):
         if self.slideshowCtrl.onTrackChanged(path):
             self.playback.onItemLoaded()  # keep playing / keep paused - never flip
             return
-        if path == getattr(self.player, '_probedPath', None):
+        if path == self.player._probedPath:
             # same file - restore the display, leave transport alone
             if self.playback.isPlaying():
                 self.audioDisplayCtrl.update()
@@ -1573,6 +1624,7 @@ class SettingsDialog(QtWidgets.QDialog):
         """Init UI."""
         super(SettingsDialog, self).__init__(parent)
         self.model = model
+        self.runsVirtual = getattr(parent, 'isVirtual', False)
         self.init_ui()
 
     def init_ui(self):
@@ -1615,6 +1667,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.softwareRender.setToolTip("Enables compatibility mode for older or virtual hardware — restart to take effect")
         self.softwareRender.setChecked(self.model.hasSoftwareRender())
         self.softwareRender.stateChanged.connect(self._onSoftwareRenderChanged)
+        if self.runsVirtual and not self.model.hasSoftwareRender():
+            # started with -v: show what is actually running, but do not write it
+            # to the config - blockSignals keeps setChecked from persisting it
+            self.softwareRender.blockSignals(True)
+            self.softwareRender.setChecked(True)
+            self.softwareRender.blockSignals(False)
+            self.softwareRender.setEnabled(False)
+            self.softwareRender.setToolTip("Forced by -v for this run - the stored setting is unchanged")
 
         # lbl = QtWidgets.QLabel("< Icon theme")
         self.setIconTheme = QtWidgets.QComboBox()

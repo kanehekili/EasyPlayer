@@ -24,6 +24,9 @@ class LoaderRig:
     startPlayingList = Player.startPlayingList
     nextTrack = Player.nextTrack
     prevTrack = Player.prevTrack
+    _prepareTrack = Player._prepareTrack
+    _prepareTrackPath = Player._prepareTrackPath
+    _resetItemState = Player._resetItemState
     _getReady = Player._getReady
     _onReadyWait = Player._onReadyWait
     _onDuration = Player._onDuration
@@ -31,14 +34,12 @@ class LoaderRig:
     def __init__(self, mpv):
         self.mpv = mpv
         self.closePending = False
-        self.lastError = None
         self.duration = 0
         self.durString = ""
         self.isPlaylist = False
         self.filePath = None
-        self.streamData = None
-        self.isAudioOnly = False
-        self._probedPath = None
+        self.isIntelGpu = False   # no per-item decoder switching under test here
+        self._resetItemState()    # the real one: streamData, kind, lastError, _probedPath
         self.probed = []
         self.loadedEmits = 0
 

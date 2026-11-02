@@ -158,16 +158,16 @@ class SlideshowController(QtCore.QObject):
         self.slideEnded.emit()
 
     def _updateSlideProgress(self):
+        """A still has no duration, so the label counts slides instead of faking
+        a clock from the slide interval - that read as a media time and counted
+        every playlist entry, videos included. Audio and video keep their real
+        time and duration, written by MainFrame._onSyncSlider."""
         pos = self._player.mpv.playlist_pos or 0
         count = len(self._player.mpv.playlist)
-        dur = self._settings.getSlideDuration()
         if count > 0:
-            sliderPos = int(self._SLIDER_RESOLUTION * (pos + 1) / count)
+            # first item at zero, last at full - position, not slides completed
+            sliderPos = 0 if count < 2 else int(self._SLIDER_RESOLUTION * pos / (count - 1))
             self._ui_Slider.blockSignals(True)
             self._ui_Slider.setSliderPosition(sliderPos)
             self._ui_Slider.blockSignals(False)
-
-        def fmt(s):
-            s = int(s)
-            return '{:02}:{:02}:{:02}'.format(s // 3600, s % 3600 // 60, s % 60)
-        self._ui_InfoLabel.setText(fmt(pos * dur) + "  \u25C6  " + fmt(count * dur))
+            self._ui_InfoLabel.setText("%d / %d" % (pos + 1, count))
