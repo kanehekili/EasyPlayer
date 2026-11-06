@@ -25,6 +25,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from itertools import tee
 import configparser
+import glob
 import gzip
 
 BIN = "ffmpeg"
@@ -240,22 +241,35 @@ class OSTools():
     def namer(self,name):
         return name+".gz"
 
-    def is_nvidia_gpu_active(self):
-        try:
-            # Try to detect active GPU via `nvidia-smi` (most reliable if installed)
-            subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            return True
-        except Exception:
-            pass
+    def currentDesktop(self):
+        return os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
-        try:
-            # Fallback: parse `lspci` output (less accurate but doesn't need NVIDIA tools)
-            result = subprocess.run(["lspci"], stdout=subprocess.PIPE, text=True)
-            return "NVIDIA" in result.stdout
-        except Exception:
-            return False
+    def setEnvironment(self, key, value):
+        os.environ[key] = value
 
-    def is_intel_gpu_active(self):
+    def setGTKEnvironment(self):
+        #won't work on cinn 22.2 / numbat: needs qt6ct
+        #os.environ["QT_QPA_PLATFORMTHEME"] = "@qtplatform@"
+        os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
+class GPUTools():
+    """GPU detection and the mpv decoder options that follow from it. Static -
+    none of it has state, and OSTools has no business knowing about GPUs."""
+    MESA_GPUS = ("0x8086", "0x1002")  #intel, amd
+    #emulated display adapters: virtio, qxl, vmware, bochs, xen. Nothing here
+    #offers accelerated GL, no matter what the guest's mesa pretends.
+    VIRTUAL_GPUS = ("0x1af4", "0x1b36", "0x15ad", "0x1234", "0x5853")
+    #exists exactly while the kernel module is loaded - which is what libcuda and
+    #nvdec need. nvidia-smi is a separate package and its lspci fallback only
+    #proves a card is present, not that the driver can be talked to.
+    NVIDIA_PROC = "/proc/driver/nvidia/version"
+
+    @staticmethod
+    def hasNvidiaDriver():
+        return os.path.isfile(GPUTools.NVIDIA_PROC)
+
+    @staticmethod
+    def is_intel_gpu_active():
         """Intel graphics - discrete (Arc/DG2) or integrated. Only the display
         controller line counts: 'Intel' appears all over lspci on any Intel
         board, so matching the whole output would hit AMD/NVIDIA boxes too."""
@@ -272,16 +286,56 @@ class OSTools():
         except Exception:
             return False
 
-    def currentDesktop(self):
-        return os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    @staticmethod
+    def gpuVendorIds():
+        """PCI vendor id of every real DRM card. Connector dirs (card1-HDMI-A-1)
+        carry no vendor file, so they drop out of the glob by themselves."""
+        ids = []
+        for path in glob.glob("/sys/class/drm/card*/device/vendor"):
+            try:
+                with open(path) as f:
+                    ids.append(f.read().strip())
+            except OSError:
+                pass
+        return ids
 
-    def setEnvironment(self, key, value):
-        os.environ[key] = value
+    @staticmethod
+    def hasMesaGpu():
+        return any(v in GPUTools.MESA_GPUS for v in GPUTools.gpuVendorIds())
 
-    def setGTKEnvironment(self):
-        #won't work on cinn 22.2 / numbat: needs qt6ct
-        #os.environ["QT_QPA_PLATFORMTHEME"] = "@qtplatform@"
-        os.environ['QT_QPA_PLATFORM'] = 'xcb'
+    @staticmethod
+    def isVirtualGpu():
+        """No card at all, or nothing but emulated ones - there is no accelerated
+        GL to be had, so mpv's gpu VO and the GL widget both need software mode."""
+        ids = GPUTools.gpuVendorIds()
+        return not ids or all(v in GPUTools.VIRTUAL_GPUS for v in ids)
+
+    #mpv decoder options for the GPU we run on. Explicit candidate lists on purpose:
+    #"auto-safe" probes nvdec, and the failed dlopen of libcuda.so.1 arrives as an
+    #mpv error on every box without the nvidia driver. Software rendering is used
+    #when asked for (-v) or when the only cards present are emulated ones.
+    #gpu-hwdec-interop is just as explicit: on vo=libmpv its "auto" means "all", so
+    #mpv loads every interop context (cuda included) when the render context is
+    #created - no matter what hwdec says. "no" blocks that, which is right wherever
+    #we decode in software or copy back: those frames live in system memory anyway.
+    @staticmethod
+    def gpuArgs(isVirtual=False, nvdecCopy=True):
+        if isVirtual or GPUTools.isVirtualGpu():
+            Log.info("Virtual GPU - software rendering, no hwdec")
+            return {"hwdec":"no", "gpu-dumb-mode":'yes', "vd-lavc-dr":'no',
+                    "gpu-hwdec-interop":"no"}
+        if GPUTools.hasNvidiaDriver():
+            Log.info("Nvidia detected - nvdec")
+            if nvdecCopy:
+                return {"hwdec":"nvdec_copy", "gpu-hwdec-interop":"no"}
+            #plain nvdec renders straight from cuda memory - this one needs it
+            return {"hwdec":"nvdec", "gpu-hwdec-interop":"cuda"}
+        if GPUTools.hasMesaGpu():
+            #vaapi-copy is the one hw path that engages inside a GL FBO
+            Log.info("Intel/AMD detected - vaapi")
+            return {"hwdec":"vaapi-copy,no", "gpu-hwdec-interop":"no"}
+        Log.info("No known GPU - software decoding")
+        return {"hwdec":"no", "gpu-hwdec-interop":"no"}
 
 class ConfigAccessor():
     __SECTION = "default"

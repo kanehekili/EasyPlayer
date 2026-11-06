@@ -28,7 +28,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import QByteArray, pyqtSignal, pyqtSlot, QThread
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from lib.mpv import MPV, MpvGlGetProcAddressFn, MpvRenderContext
-from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor
+from FFMPEGTools import  FFStreamProbe, OSTools, ConfigAccessor, GPUTools
 import sys, json, FFMPEGTools, getopt, traceback, locale, re, math
 from enum import Enum
 from threading import Condition
@@ -101,7 +101,8 @@ class Player(QOpenGLWidget):
         self._timePos = 0;
         self._resetItemState()
         self._demuxOffset = 0.1
-        self.isIntelGpu = False   # set by _gpuArgs - must exist before mpv is built
+        self.isIntelGpu = False   # set by _getMPVArgs - must exist before mpv is built
+        self._gpuHwdec = "no"     # dito - the decoder video items run on
         self.mpv = self._createMpv(isVirtual)
         self.filePath = path
         self.isPlaylist = False
@@ -355,13 +356,13 @@ class Player(QOpenGLWidget):
             self.kind = MediaKind.AUDIO if self.isAudioOnly else MediaKind.VIDEO
         if not self.isIntelGpu:
             return
-        want = 'no' if self.kind is MediaKind.STILL else 'auto-safe'
+        want = 'no' if self.kind is MediaKind.STILL else self._gpuHwdec
         try:
-            # mpv reports hwdec as a list - compare against its first entry, or
-            # the write happens on every navigation and re-inits for nothing
+            # mpv reports hwdec as a list - join it back, or the write happens on
+            # every navigation and re-inits the decoder for nothing
             current = self.mpv.hwdec
             if isinstance(current, (list, tuple)):
-                current = current[0] if current else ''
+                current = ",".join(current)
             if current != want:
                 self.mpv.hwdec = want
         except Exception:
@@ -566,26 +567,9 @@ class Player(QOpenGLWidget):
         self.mpv = None
         event.accept()
 
-    def _gpuArgs(self):
-        """GPU specific mpv options. Resolved before mpv is built, so the very
-        first file already gets the right decoder - setting it after the GL
-        context exists leaves that file on the default. Precedence is decided
-        here, not by the order of branches somewhere else."""
-        tools = FFMPEGTools.OSTools()
-        if tools.fileExists("/proc/driver/nvidia/version"):
-            Log.info("Nvidia detected - nvdec")
-            return {"hwdec": "nvdec"}
-        if tools.is_intel_gpu_active():
-            # vaapi-copy is the only hw path that engages inside the GL FBO and
-            # it stalls on a single large still - _prepareTrack picks per item
-            self.isIntelGpu = True
-            Log.info("Intel GPU detected - decoder selected per item")
-            return {"hwdec": "auto-safe"}
-        return {}   # AMD: case 3 goes here
-
     # test code - not wired up, kept as a reference argument set
     def _getMPVArgsEasy(self,isVirtual):
-        kwArgs = {"hwdec":"auto-safe", "log_handler":self._passLog, "loglevel": 'error', "pause":False, "audio": "1", "keep_open": "always", "vo":"libmpv",
+        kwArgs = {"hwdec":"no", "log_handler":self._passLog, "loglevel": 'error', "pause":False, "audio": "1", "keep_open": "always", "vo":"libmpv",
                 "input_vo_keyboard": False, "video-latency-hacks": "yes", "hr_seek": 'yes', "hr_seek_demuxer_offset": self._demuxOffset,  # below is test
                 "demuxer_max_back_bytes":'150M', "demuxer_max_bytes":'150M', "demuxer_cache_wait":'no', "stream_buffer_size":'255MiB',
                 "audio-display":"embedded-first"
@@ -596,8 +580,8 @@ class Player(QOpenGLWidget):
         return kwArgs
     
     def _getMPVArgs(self,isVirtual):
-        kwArgs= {"hwdec":"auto-safe",
-            "vo":"libmpv", #depends on backend - see below                
+        kwArgs= {"hwdec":"no", #GPUTools decides - never "auto-safe", that probes nvdec
+            "vo":"libmpv", #depends on backend - see below
             "log_handler":self._passLog,
             "loglevel" : 'error',
             "input_vo_keyboard" : False,  #We'll take the qt events
@@ -616,11 +600,17 @@ class Player(QOpenGLWidget):
             }
         if isVirtual:  # software rendering - no GPU specifics at all
             Log.info("Runs in VIRTGL mode")
-            kwArgs['gpu-dumb-mode'] = 'yes'
-            kwArgs['vd-lavc-dr'] = 'no'
-            kwArgs['hwdec']= "none"
+            #also resets it on the software retry - nothing to switch per item there
+            self.isIntelGpu = False
         else:
-            kwArgs.update(self._gpuArgs())
+            # vaapi-copy is the only hw path that engages inside the GL FBO and
+            # it stalls on a single large still - _prepareTrackPath picks per item
+            self.isIntelGpu = GPUTools.is_intel_gpu_active()
+        #resolved before mpv is built, so the very first file already gets the right
+        #decoder - setting it after the GL context exists leaves that file on the default
+        gpuArgs = GPUTools.gpuArgs(isVirtual, nvdecCopy=False)
+        self._gpuHwdec = gpuArgs["hwdec"]  #what video items run on - stills switch away
+        kwArgs.update(gpuArgs)
         return kwArgs
         
     def _passLog(self, __loglevel, component, message):

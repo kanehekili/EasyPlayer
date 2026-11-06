@@ -21,7 +21,7 @@ import support
 
 support.initPlaylistModule()
 
-from FFMPEGTools import OSTools        # noqa: E402
+from FFMPEGTools import GPUTools       # noqa: E402
 import EasyPlayer                      # noqa: E402
 from EasyPlayer import MediaKind       # noqa: E402
 
@@ -31,12 +31,14 @@ class Stub:
     pass
 
 
-def player(vid=False, videoParams=None, intel=True, probed=None, audioOnly=False):
+def player(vid=False, videoParams=None, intel=True, probed=None, audioOnly=False,
+           hwdec='vaapi-copy,no'):
     p = Stub()
     p.mpv = Stub()
     p.mpv.vid = vid
     p.mpv.video_params = videoParams
-    p.mpv.hwdec = ['auto-safe']
+    p.mpv.hwdec = hwdec.split(',')
+    p._gpuHwdec = hwdec   # GPUTools decided this once, before mpv was built
     p.isIntelGpu = intel
     p.kind = MediaKind.NONE
     p._probedPath = probed
@@ -98,7 +100,7 @@ class IntelGpuDetectionTest(unittest.TestCase):
     def detect(self, lspciOutput):
         result = mock.Mock(stdout=lspciOutput, returncode=0)
         with mock.patch('FFMPEGTools.subprocess.run', return_value=result):
-            return OSTools().is_intel_gpu_active()
+            return GPUTools.is_intel_gpu_active()
 
     def test_discreteArc(self):
         self.assertTrue(self.detect(
@@ -126,7 +128,7 @@ class IntelGpuDetectionTest(unittest.TestCase):
 
     def test_lspciMissingIsNotIntel(self):
         with mock.patch('FFMPEGTools.subprocess.run', side_effect=OSError("no lspci")):
-            self.assertFalse(OSTools().is_intel_gpu_active())
+            self.assertFalse(GPUTools.is_intel_gpu_active())
 
 
 class HwdecChoiceTest(unittest.TestCase):
@@ -134,7 +136,7 @@ class HwdecChoiceTest(unittest.TestCase):
 
     def prepare(self, path, **kw):
         p = player(**kw)
-        hw = {'value': ['auto-safe'], 'writes': 0}
+        hw = {'value': p._gpuHwdec.split(','), 'writes': 0}
 
         class Mpv:
             @property
@@ -143,7 +145,7 @@ class HwdecChoiceTest(unittest.TestCase):
 
             @hwdec.setter
             def hwdec(self, v):
-                hw['value'] = [v]
+                hw['value'] = v.split(',')   # mpv splits a candidate list
                 hw['writes'] += 1
         p.mpv = Mpv()
         p.mpv_hw = hw
@@ -158,7 +160,7 @@ class HwdecChoiceTest(unittest.TestCase):
     def test_videoKeepsHardwareDecoding(self):
         p, hw = self.prepare('/x/clip.mp4')
         self.assertIs(p.kind, MediaKind.VIDEO)
-        self.assertEqual(hw['value'], ['auto-safe'])
+        self.assertEqual(hw['value'], ['vaapi-copy', 'no'])
 
     def test_noWriteWhenTheDecoderAlreadyMatches(self):
         """mpv reports hwdec as a list; comparing it to a string always differed,
@@ -176,7 +178,7 @@ class HwdecChoiceTest(unittest.TestCase):
         p, hw = self.prepare('/x/photo.jpg', intel=False)
         self.assertIs(p.kind, MediaKind.STILL, "kind is resolved on every GPU")
         self.assertEqual(hw['writes'], 0, "but only Intel changes hwdec")
-        self.assertEqual(hw['value'], ['auto-safe'])
+        self.assertEqual(hw['value'], ['vaapi-copy', 'no'])
 
 
 class MpvFallbackTest(unittest.TestCase):
