@@ -1,7 +1,7 @@
 # EasyPlayer
-Version 1.6.1
+Version 1.6.2
 
-![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.6.1/easyplayer1.6.1.tar)
+![Download](https://github.com/kanehekili/EasyPlayer/releases/download/1.6.2/easyplayer1.6.2.tar)
 
 A simple video and audio player based on mpv and QT6 . It is a spin off of my VideoCut app. It handles pictures, plays videos and audio files.
 
@@ -12,9 +12,9 @@ Configurable Spectrum Analyzer:
 ![Screenshot](https://github.com/kanehekili/EasyPlayer/blob/main/spectrum.png)
 
 ### Prerequisites
-* Arch: python3, python-pillow and mpv
+* Arch: python3, python-pillow, qt6-svg and mpv
 * Debian/Mint/Ubuntu: python3 python3-pil libmpv2 (or libmpv1) (no-recommends) 
-* Ubuntu 26.04 needs additionally qt6-svg-plugins
+* Qt6 SVG plugin, or the toolbar icons stay empty: libqt6svg6 on Mint 22 and Ubuntu 24.04, qt6-svg-plugins from Ubuntu 26.04 on
   #not working for Ubuntu 18.4: libmpv - use python3-opencv instead
 * Fedora: python3-pillow-qt and mpv-libs.x86_64
 * ffmpeg > 3.X to 8.X
@@ -55,8 +55,9 @@ If you are running a DE with GTK/Gnome (as opposed to LXQT or KDE)  you might se
 
 
 ### Support for Qemu and old hardware:
-* -v will use a virtual GL driver or software for rendering. (easyplayer -v)
-* Can be set via the "Settings dialog - Software mode" as well. 
+* Virtual machines are detected automatically - software mode is switched on without any option.
+* -v enforces that mode on any machine (easyplayer -v). Last resort, should the detection be wrong.
+* The settings dialog has the same switch as a permanent setting ("Software rendering") - it needs a restart.
 
 
 #### Install via pip (all distros)
@@ -92,12 +93,12 @@ Select video and open it with "Open with ->EasyPlayer", oder via terminal "easyp
 
 #### Install dependencies manually on Linux Mint or Ubuntu (tested from noble to resolute)
 ```
-sudo apt install --no-install-recommends python3-pyqt6 ffmpeg python3-pil libmpv2
+sudo apt install --no-install-recommends python3-pyqt6 ffmpeg python3-pil libmpv2 libqt6svg6
 ```
 
 #### Install dependencies on Fedora
 ```
-sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
+sudo dnf python3-qt6 qt6-qtsvg ffmpeg python3-pillow-qt mpv-libs.x86_64
 ```
 
 ### How to install with a terminal
@@ -118,7 +119,32 @@ sudo dnf python3-qt6 ffmpeg python3-pillow-qt mpv-libs.x86_64
 * Open a terminal
 * execute `sudo /opt/easyplayer/uninstall.sh`
 
+### Cloning this git
+`src/FFMPEGTools.py` is not part of this repository. It is shared code whose master lives in my [VideoCut](https://github.com/kanehekili/VideoCut) project - keeping a single copy there is what stops the two from drifting apart. The build copies it in, so the released packages always contain it.
+
+A fresh clone therefore has to get that file. Two ways:
+* Check out VideoCut next to this project (same parent directory) - that is what the build expects:
+```
+cd ..
+git clone https://github.com/kanehekili/VideoCut
+```
+* Or simply copy that one file into the sources:
+```
+cp ../VideoCut/src/FFMPEGTools.py src/
+```
+
+Then start the app with `python3 EasyPlayer.py` from the `src` folder. Without that file Python stops with `ModuleNotFoundError: No module named 'FFMPEGTools'`.
+
+Building the packages with `gradle build_all` always needs VideoCut next to this project - copying the single file is enough to run it, not to build it.
+
 ### Changes 
+26.11.2026
+* Video decoder detection detached from MPV probe
+* Qemu/KVM guests are detected - software mode needs no -v
+* Spectrum analyzer reworked: gliding bars that follow the beat more tightly
+* Toolbar icons stayed empty without the Qt6 SVG plugin - now a package dependency
+* Fullscreen icon is vector in both flat themes
+
 03.11.2026
 * Intel GPU support, spectrum analyzer fixes and a slide counter fix
 

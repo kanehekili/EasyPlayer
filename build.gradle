@@ -11,6 +11,11 @@ def distros    = gradle.ext.distros
 // All output goes to dist/ - templates in build/ are never touched by "clean"
 def outDir = file("dist")
 
+// Shared code: VideoCut holds the master. Deliberately not kept in our src, so
+// it cannot drift apart from VideoCut's - it is vendored in at build time and
+// VideoCut has to sit next to this project. Same as VideoMerge does it.
+def sharedTools = file("../VideoCut/src/FFMPEGTools.py")
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 def computeSHA256(File f) {
@@ -27,13 +32,24 @@ def stageDir = { String sub -> file("${outDir}/stage/${sub}") }
 // "pkg-a, pkg-b" -> "'pkg-a' 'pkg-b'"  (PKGBUILD array format)
 def archPkgFmt = { String s -> s.split(',').collect { "'${it.trim()}'" }.join(' ') }
 
-// Copy *.py sources + icons + lib/mpv.py into a staging directory
+// Copy *.py sources + FFMPEGTools + icons + lib/mpv.py into a staging directory
 def stageSources = { File dst ->
+    // Copying a file that is not there is a silent no-op, so the package would
+    // ship without FFMPEGTools and die with an ImportError on the user's
+    // machine. Refuse to build instead.
+    if (!sharedTools.isFile()) {
+        throw new GradleException(
+            "FFMPEGTools.py not found at ${sharedTools}\n" +
+            "The shared code lives in VideoCut, which has to be checked out " +
+            "next to this project (same parent directory).")
+    }
     copy {
         from("src") { include "*.py" }
         into(dst)
         filter(ReplaceTokens, tokens: tok([xxx: version]))
     }
+    //no token filter here, the master carries no @xxx@ placeholders
+    copy { from(sharedTools) into(dst) }
     //This doesn't work: file("${dst}/EasyPlayer.py").setExecutable(true) -groovy stuff...
 	copy { from "src/icons"      into "${dst}/icons" }
     copy { from "src/lib/mpv.py" into "${dst}/lib"   }

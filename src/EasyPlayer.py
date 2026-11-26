@@ -48,7 +48,8 @@ Version = "@xxx@"
 
 AppName="EasyPlayer"
 Log = FFMPEGTools.Log
-AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "CosmicRock.jpg")
+WORK_DIR = OSTools().getWorkingDirectory()
+AUDIO_FALLBACK_IMAGE = OSTools().joinPathes(WORK_DIR, "icons", "CosmicRock.jpg")
 SLIDE_DURATION = 10
 ZOOM_MAX = 8.0  # 800%
 ZOOM_STEP = 1.1  # per wheel notch
@@ -1112,7 +1113,7 @@ class MainFrame(QtWidgets.QMainWindow):
         self.shortcutPageDown.activated.connect(lambda: self.player.seekRelative(-60))        
 
     def _showIdleIcon(self):
-        iconPath = FFMPEGTools.OSTools().joinPathes(FFMPEGTools.OSTools().getWorkingDirectory(), "icons", "easyPlay.png")
+        iconPath = OSTools().joinPathes(WORK_DIR, "icons", "easyPlay.png")
         self.player.showImage(iconPath)
 
     def _makeLayout(self):
@@ -1735,7 +1736,7 @@ class IconMapper():
         self._read()
         
     def _read(self):
-        ipath = OSTools().joinPathes(OSTools().getWorkingDirectory(), "icons", "icomap.json")
+        ipath = OSTools().joinPathes(WORK_DIR, "icons", "icomap.json")
         with open(ipath) as fn:
             self.map = json.load(fn)
             

@@ -2,6 +2,11 @@
 
 Must be imported before PyQt6 - it selects the offscreen platform so the suite
 runs without a display, and puts src/ on the path.
+
+FFMPEGTools.py is not part of this project's src: VideoCut holds the master and
+build.gradle vendors it in at build time, so the two can never drift apart. The
+tests inherit that requirement - VideoCut has to be checked out next to this
+project, exactly as the build expects it.
 """
 import os
 import sys
@@ -14,9 +19,20 @@ import subprocess
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src')
-if SRC not in sys.path:
-    sys.path.insert(0, SRC)
+PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(PROJECT, 'src')
+#same relative location build.gradle uses for sharedTools
+SHARED = os.path.join(os.path.dirname(PROJECT), 'VideoCut', 'src')
+
+if not os.path.isfile(os.path.join(SHARED, 'FFMPEGTools.py')):
+    raise RuntimeError(
+        f"FFMPEGTools.py not found in {SHARED}\n"
+        "The shared code lives in VideoCut, which has to be checked out "
+        "next to this project (same parent directory).")
+
+for _path in (SHARED, SRC):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
@@ -144,7 +160,11 @@ class AppWindow:
         self.display = os.environ.get('DISPLAY')
 
     def __enter__(self):
-        env = dict(os.environ, DISPLAY=self.display)
+        #the child runs EasyPlayer.py from src, where FFMPEGTools no longer
+        #lives - it has to find the master the same way we did
+        pythonPath = os.pathsep.join(
+            p for p in (SHARED, os.environ.get('PYTHONPATH')) if p)
+        env = dict(os.environ, DISPLAY=self.display, PYTHONPATH=pythonPath)
         self.process = subprocess.Popen(
             [sys.executable, 'EasyPlayer.py', self.path],
             cwd=SRC, env=env,

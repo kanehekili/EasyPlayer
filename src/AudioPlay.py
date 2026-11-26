@@ -11,6 +11,7 @@
 # this program; if not, see <https://www.gnu.org/licenses/>.
 
 import subprocess
+import math
 from threading import Thread
 from PyQt6 import QtWidgets, QtCore, QtGui
 import FFMPEGTools
@@ -26,16 +27,22 @@ except ImportError:
 
 SPECTRUM_SAMPLE_RATE = 44100
 SPECTRUM_BLOCK_SIZE = 4096
+# The window advances by one hop per update. 4096 keeps the 10.8 Hz bins the
+# low bands need; the hop alone sets the frame rate (1024 -> ~43/s).
+SPECTRUM_HOP_SIZE = 1024
+# Smoothing as time constants, so the feel does not change with the hop
+SPECTRUM_RISE_TAU = 0.134
+SPECTRUM_DECAY_TAU = 0.882
 
 
 class ParecStream:
-    def __init__(self, device, samplerate, blocksize, callback):
+    def __init__(self, device, samplerate, hopsize, callback):
         self._proc = subprocess.Popen(
             ['parec', f'--device={device}', '--format=float32le',
              '--channels=1', f'--rate={samplerate}', '--latency-msec=20'],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
         )
-        self._blocksize = blocksize
+        self._hopsize = hopsize
         self._callback = callback
         self._stopped = False
         self._thread = Thread(target=self._loop, daemon=True)
@@ -55,14 +62,14 @@ class ParecStream:
         self._thread.join(timeout=1)
 
     def _loop(self):
-        bytes_per_block = self._blocksize * 4
+        bytes_per_hop = self._hopsize * 4
         while not self._stopped:
-            data = self._proc.stdout.read(bytes_per_block)
-            if not data or len(data) < bytes_per_block:
+            data = self._proc.stdout.read(bytes_per_hop)
+            if not data or len(data) < bytes_per_hop:
                 break
             if not self._stopped:
                 arr = np.frombuffer(data, dtype='float32').reshape(-1, 1)
-                self._callback(arr, self._blocksize, None, None)
+                self._callback(arr, self._hopsize, None, None)
 
 
 class SpectrumOverlay(QtWidgets.QWidget):
@@ -132,14 +139,22 @@ class SpectrumOverlay(QtWidgets.QWidget):
 
 
 class SpectrumController(QtCore.QObject):
+    magsReady = QtCore.pyqtSignal()  # parec thread -> GUI thread repaint
+
     def __init__(self, player):
         super().__init__()
         self._player = player
         self._specStream = None
         self._monitorDevice = None
         self._monitorFailed = False
+        self._buffer = None
+        self._window = None
+        self._bandMasks = None
+        self._riseFactor = 1.0
+        self._decayFactor = 0.0
         self._overlay = SpectrumOverlay(player)
         self._overlay.hide()
+        self.magsReady.connect(self._overlay.update)
 
     @property
     def overlay(self):
@@ -166,10 +181,11 @@ class SpectrumController(QtCore.QObject):
             if not device:
                 Log.warning("Spectrum capture failed - no monitor device found")
                 return False
+            self._prepareFft()
             self._specStream = ParecStream(
                 device,
                 SPECTRUM_SAMPLE_RATE,
-                SPECTRUM_BLOCK_SIZE,
+                SPECTRUM_HOP_SIZE,
                 self._audioCallback
             )
             self._specStream.start()
@@ -209,17 +225,36 @@ class SpectrumController(QtCore.QObject):
         Log.info("Spectrum: no monitor device found")
         return None
 
+    def _prepareFft(self):
+        """Window, bin masks and smoothing factors never change while capturing -
+        rebuilding them per callback was most of its cost."""
+        self._buffer = np.zeros(SPECTRUM_BLOCK_SIZE, dtype='float32')
+        self._window = np.hanning(SPECTRUM_BLOCK_SIZE)
+        freqs = np.fft.rfftfreq(SPECTRUM_BLOCK_SIZE, 1.0 / SPECTRUM_SAMPLE_RATE)
+        self._bandMasks = []
+        for i in range(SpectrumOverlay.BANDS):
+            mask = (freqs >= SpectrumOverlay.BAND_EDGES[i]) & (freqs < SpectrumOverlay.BAND_EDGES[i + 1])
+            self._bandMasks.append(mask if mask.any() else None)
+        hopSecs = SPECTRUM_HOP_SIZE / float(SPECTRUM_SAMPLE_RATE)
+        self._riseFactor = 1.0 - math.exp(-hopSecs / SPECTRUM_RISE_TAU)
+        self._decayFactor = math.exp(-hopSecs / SPECTRUM_DECAY_TAU)
+
     def _audioCallback(self, indata, __frames, __time, __status):
-        data = indata[:, 0]
-        windowed = data * np.hanning(len(data))
+        hop = indata[:, 0]
+        n = len(hop)
+        if n >= SPECTRUM_BLOCK_SIZE:
+            self._buffer = hop[-SPECTRUM_BLOCK_SIZE:].astype('float32', copy=True)
+        else:
+            # concatenate rather than shift in place - an overlapping slice
+            # assignment on one array has no defined result in numpy
+            self._buffer = np.concatenate((self._buffer[n:], hop))
+        windowed = self._buffer * self._window
         fft_data = np.abs(np.fft.rfft(windowed))
-        freqs = np.fft.rfftfreq(len(data), 1.0 / SPECTRUM_SAMPLE_RATE)
         DB_FLOOR = -100.0
         reference = SPECTRUM_BLOCK_SIZE / 15.0
         new_mags = []
-        for i in range(SpectrumOverlay.BANDS):
-            mask = (freqs >= SpectrumOverlay.BAND_EDGES[i]) & (freqs < SpectrumOverlay.BAND_EDGES[i + 1])
-            if mask.any():
+        for i, mask in enumerate(self._bandMasks):
+            if mask is not None:
                 val = float(np.max(fft_data[mask])) / reference
                 db = 20.0 * np.log10(val) if val > 0 else DB_FLOOR
                 if i >= SpectrumOverlay.BANDS - 4:
@@ -228,11 +263,11 @@ class SpectrumController(QtCore.QObject):
             else:
                 new_mags.append(0.0)
         with self._overlay._lock:
-            riseFactor = 0.5
-            decayFactor = 0.9
+            riseFactor = self._riseFactor
+            decayFactor = self._decayFactor
             for i in range(SpectrumOverlay.BANDS):
                 if new_mags[i] > self._overlay._mags[i]:
                     self._overlay._mags[i] += riseFactor * (new_mags[i] - self._overlay._mags[i])
                 else:
                     self._overlay._mags[i] *= decayFactor
-        self._overlay.update()
+        self.magsReady.emit()
